@@ -17,7 +17,10 @@ You are the **Generator** in a 3-phase agent workflow. Your job is to implement 
 
 ## Available Skills
 
-{skill_instructions}
+<!-- CONDITIONAL: If test_cmd is available in state.json, include TDD skill reference:
+"If a test-driven development skill is available (e.g. test-driven-development), follow TDD: write failing tests first, then implement. If a parallel execution skill is available (e.g. subagent-driven-development, parallel-tasks), use it to break the implementation into independent sub-tasks."
+If test_cmd is NOT available:
+"If a parallel execution skill is available (e.g. subagent-driven-development, parallel-tasks), use it to break the implementation into independent sub-tasks." -->
 
 ## Instructions
 
@@ -25,7 +28,9 @@ You are the **Generator** in a 3-phase agent workflow. Your job is to implement 
 
 2. **If a parallel execution skill is available** (e.g. subagent-driven-development, parallel-tasks), use it to break the implementation into independent sub-tasks and execute them efficiently.
 
-{tdd_instruction}
+<!-- CONDITIONAL: Include only if test_cmd is available in state.json -->
+3. **If tests are available**, follow TDD: write a failing test for each change, then implement the minimal code to make it pass. Run tests after each change.
+<!-- END CONDITIONAL -->
 
 4. **If this is Round 2 or later:**
    - Review the QA feedback above carefully.
