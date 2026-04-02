@@ -77,8 +77,9 @@ When the user provides a task (via $ARGUMENTS or in conversation), execute this 
 2. Interpret it with the current context (task, repo_path, lang, scope). Do NOT write a rendered file — process inline.
 3. Follow the planner instructions:
    - Explore the codebase (CLAUDE.md, relevant files)
-   - **Invoke brainstorming skill** if available: `Skill("superpowers:brainstorming")` or equivalent from any installed plugin
-   - **Invoke planning skill** if available: `Skill("superpowers:writing-plans")` or equivalent
+   - **Invoke a brainstorming skill** — search installed skills for "brainstorming" or "ideation" and invoke the first match
+   - **Invoke a planning skill** — search installed skills for "writing-plans" or "plan" and invoke the first match
+   - If no matching skill is found, proceed without it
    - Write `spec.md` to `docs/harness/<slug>/spec.md`
 4. Update `.harness/state.json`: set phase to `"plan_ready"` (spec written, awaiting confirmation).
 
@@ -108,9 +109,10 @@ If user requests modifications, update spec.md and re-confirm. If user says "중
    - `qa_feedback`: read from `docs/harness/<slug>/qa_report.md` if round > 1, else "(First round — no QA feedback)"
    - `round_num`, `scope`, `max_files`: from state.json
    - If test_cmd is available, include TDD instructions; otherwise skip
-4. **Invoke implementation skills** if available:
-   - TDD: `Skill("superpowers:test-driven-development")` (if test_cmd available)
-   - Parallel execution: `Skill("superpowers:subagent-driven-development")` or `Skill("superpowers:dispatching-parallel-agents")`
+4. **Invoke implementation skills** — search installed skills and invoke matches:
+   - If test_cmd available: search for "test-driven-development" or "tdd"
+   - Search for "subagent-driven-development", "parallel-tasks", or "dispatching-parallel-agents"
+   - If no matching skill is found, proceed without it
 5. Follow the generator instructions — implement code changes.
 6. Write `docs/harness/<slug>/changes.md` listing all modified/created files.
 
@@ -122,10 +124,11 @@ If user requests modifications, update spec.md and re-confirm. If user says "중
    - `spec_content`, `changes_content`: from docs/harness/<slug>/
    - `test_available`, `build_cmd`, `test_cmd`: from state.json
    - `round_num`, `scope`: from state.json
-4. **Invoke evaluation skills** if available:
-   - Debugging: `Skill("superpowers:systematic-debugging")` (if tests fail)
-   - Code review: `Skill("superpowers:requesting-code-review")`
-   - Verification: `Skill("superpowers:verification-before-completion")`
+4. **Invoke evaluation skills** — search installed skills and invoke matches:
+   - If tests fail: search for "systematic-debugging" or "debugging"
+   - Search for "requesting-code-review" or "code-review"
+   - Search for "verification-before-completion" or "verification"
+   - If no matching skill is found, proceed without it
 5. Follow the evaluator instructions:
    - Run tests if available
    - Code review against 5 criteria
@@ -180,5 +183,5 @@ Phase labels: plan_ready → "Planner — writing spec", gen_ready → "Generato
 - **Stay within scope.** Do not modify files outside the specified scope.
 - **Evaluator must be strict.** Do not hand-wave issues.
 - **Git safety.** The workflow creates a branch automatically.
-- **Use whatever skills are available.** Don't require specific plugins — use matching skills from any installed plugin.
+- **Use whatever skills are available.** Search installed skills by capability keyword (e.g. "brainstorming", "tdd", "code-review"), not by plugin name. If no match exists, proceed without it. Never fail because a specific plugin is missing.
 - **Language matching.** Detect the language of the user's task description and communicate all progress updates, questions, and reports in that same language. Spec sections, QA criteria, and commit messages should also match the detected language.

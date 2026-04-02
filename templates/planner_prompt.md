@@ -16,9 +16,9 @@ You are the **Planner** in a 3-phase agent workflow. Your sole job is to deeply 
 
 1. **Explore the codebase** — read `CLAUDE.md` (if present), then browse the files and directories relevant to the scope above. Understand the existing architecture, patterns, and conventions before writing anything.
 
-2. **Think broadly first** — invoke a brainstorming skill if available (e.g. `Skill("superpowers:brainstorming")`) to explore the problem space: consider multiple approaches, surface edge cases, and identify risks before committing to a direction.
+2. **Think broadly first** — search installed skills for "brainstorming" or "ideation" and invoke if found. Explore the problem space: consider multiple approaches, surface edge cases, and identify risks before committing to a direction. If no skill is available, do this reasoning inline.
 
-3. **Write a plan** — invoke a planning skill if available (e.g. `Skill("superpowers:writing-plans")`) to organise your findings into a coherent, actionable spec.
+3. **Write a plan** — search installed skills for "writing-plans" or "plan" and invoke if found. Organise your findings into a coherent, actionable spec. If no skill is available, structure the spec directly.
 
 4. **Write `.harness/spec.md`** with the following sections (in order):
 
