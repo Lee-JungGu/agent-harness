@@ -9,6 +9,16 @@ You are orchestrating a 3-Phase development workflow using the Agent Harness CLI
 
 **Zero-setup:** No initialization or repo registration required. The harness auto-detects language, test commands, and build commands from the current directory.
 
+## Python Detection
+
+Before running any harness command, detect the correct Python executable **once** and reuse it for all subsequent commands:
+
+```bash
+py --version 2>/dev/null && PYTHON=py || python3 --version 2>/dev/null && PYTHON=python3 || PYTHON=python
+```
+
+Use `$PYTHON` in place of `python` for every harness command below.
+
 ## Workflow
 
 When the user provides a task (via $ARGUMENTS or in conversation), execute this workflow:
@@ -18,7 +28,7 @@ When the user provides a task (via $ARGUMENTS or in conversation), execute this 
 Run from the current working directory:
 
 ```bash
-python {CLAUDE_PLUGIN_ROOT}/harness.py run --task "$ARGUMENTS"
+$PYTHON {CLAUDE_PLUGIN_ROOT}/harness.py run --task "$ARGUMENTS"
 ```
 
 Optional flags: `--scope "<pattern>"`, `--max-rounds 3`, `--max-files 20`, `--dry-run`
@@ -41,7 +51,7 @@ Read `.harness/planner_prompt_rendered.md` and follow its instructions to:
 ### Step 3: Advance to Phase 2 (Generator)
 
 ```bash
-python {CLAUDE_PLUGIN_ROOT}/harness.py next
+$PYTHON {CLAUDE_PLUGIN_ROOT}/harness.py next
 ```
 
 Read `.harness/generator_prompt_rendered.md` and follow its instructions to:
@@ -53,7 +63,7 @@ Read `.harness/generator_prompt_rendered.md` and follow its instructions to:
 ### Step 4: Advance to Phase 3 (Evaluator)
 
 ```bash
-python {CLAUDE_PLUGIN_ROOT}/harness.py next
+$PYTHON {CLAUDE_PLUGIN_ROOT}/harness.py next
 ```
 
 Read `.harness/evaluator_prompt_rendered.md` and follow its instructions to:
@@ -65,7 +75,7 @@ Read `.harness/evaluator_prompt_rendered.md` and follow its instructions to:
 ### Step 5: Check result
 
 ```bash
-python {CLAUDE_PLUGIN_ROOT}/harness.py next
+$PYTHON {CLAUDE_PLUGIN_ROOT}/harness.py next
 ```
 
 - PASS: task complete. Inform the user.
@@ -75,7 +85,7 @@ python {CLAUDE_PLUGIN_ROOT}/harness.py next
 ### Status check (anytime)
 
 ```bash
-python {CLAUDE_PLUGIN_ROOT}/harness.py status
+$PYTHON {CLAUDE_PLUGIN_ROOT}/harness.py status
 ```
 
 ## Key Rules
