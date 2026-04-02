@@ -86,3 +86,4 @@ python {CLAUDE_PLUGIN_ROOT}/harness.py status
 - **Evaluator must be strict.** Do not hand-wave issues.
 - **Git safety.** The harness creates a branch automatically.
 - **Use whatever skills are available.** Don't require specific plugins — use matching skills from any installed plugin.
+- **Language matching.** Detect the language of the user's task description and communicate all progress updates, questions, and reports in that same language. Spec sections, QA criteria, and commit messages should also match the detected language.
