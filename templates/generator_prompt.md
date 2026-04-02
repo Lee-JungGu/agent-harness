@@ -25,7 +25,7 @@ You are the **Generator** in a 3-phase agent workflow. Your job is to implement 
 
 2. **Use the `superpowers:subagent-driven-development` skill** to break the implementation into independent sub-tasks and execute them efficiently.
 
-3. **Use the `superpowers:test-driven-development` skill** — write or update tests before (or alongside) implementation code so that correctness is verifiable.
+{tdd_instruction}
 
 4. **If this is Round 2 or later:**
    - Review the QA feedback above carefully.
