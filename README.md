@@ -8,13 +8,13 @@ Inspired by Anthropic's [Harness Design for Long-Running Application Development
 
 ## What it does
 
-Separates planning, implementation, and review into distinct phases with file-based handoffs. This prevents the "self-evaluation bias" where a single agent rates its own work too favorably, and enforces structured planning before coding.
+Separates planning, implementation, and review into distinct phases with file-based handoffs. The Evaluator runs as an **isolated subagent** with research-backed bias reduction techniques to prevent the "self-evaluation bias" where a single agent rates its own work too favorably.
 
 ```
 /agent-harness:harness  -> [Phase 1] Planner: analyze task, write spec.md
                         -> Confirmation Gate: user approves spec before proceeding
                         -> [Phase 2] Generator: implement code, write changes.md
-                        -> [Phase 3] Evaluator: test + review, write qa_report.md
+                        -> [Phase 3] Evaluator (isolated subagent): test + review, write qa_report.md
                         -> PASS -> Done / FAIL -> Back to Phase 2 (max N rounds)
 ```
 
@@ -54,13 +54,30 @@ The harness detects language, test, and build commands from your project files:
 ## How it works
 
 1. You invoke the harness skill with a task description
-2. **Setup**: Auto-detects language/test/build, creates `.harness/state.json` and `docs/harness/<task-slug>/`, creates a `harness/*` git branch
+2. **Setup**: Auto-detects language/test/build, detects your language, creates `.harness/state.json` and `docs/harness/<task-slug>/`, creates a `harness/*` git branch
 3. **Phase 1 -- Planner**: Claude explores the codebase, analyzes the task, and writes `spec.md`
 4. **Confirmation Gate**: Claude shows the spec and waits for explicit user approval before proceeding. Ambiguous responses are re-confirmed.
-5. **Phase 2 -- Generator**: Claude implements the code following the spec, and writes `changes.md`
-6. **Phase 3 -- Evaluator**: Claude runs tests and performs code review, writes `qa_report.md` with a PASS/FAIL verdict
+5. **Phase 2 -- Generator**: Claude implements the code following the spec, with scope pre-verification before writing code
+6. **Phase 3 -- Evaluator** (isolated subagent): Runs as a separate agent with anchor-free input, performs pre-mortem analysis, tests, and structured code review with bias reduction techniques. Writes `qa_report.md` with a PASS/FAIL verdict
 7. If FAIL, the user is asked whether to retry (up to max rounds)
 8. On completion, the user is asked whether to commit the artifacts
+
+### Evaluator Bias Reduction
+
+The Evaluator uses 6 research-backed techniques to reduce self-evaluation bias:
+
+| Technique | Research Basis |
+|-----------|---------------|
+| **Context isolation** (separate subagent) | Agent-as-a-Judge (ICLR 2025): 90.44% human agreement vs 60.38% for inline evaluation |
+| **Anchor-free input** (no Generator reasoning passed) | Anchoring bias research: LLMs anchor strongly to provided context |
+| **Defect-assumption framing** ("assume defects exist") | Pre-mortem (Brookings): reduces overconfidence |
+| **Author neutralization** (no author identity disclosed) | PNAS 2025: LLMs favor LLM-generated content at 89% rate |
+| **PASS-before-rebuttal** (must list problems before PASS) | Confirmation bias: structural forced consideration of counterevidence |
+| **Rubric decomposition** (2-3 sub-checks per criterion) | G-Eval, RocketEval: finer granularity reduces evaluation bias |
+
+### Session Recovery
+
+If a session is interrupted, the harness detects the existing `.harness/state.json` on next invocation and offers to resume from where you left off.
 
 ### File Structure
 
@@ -78,13 +95,12 @@ docs/harness/<task-slug>/
 
 The Generator phase consumes significant tokens and is hard to undo. The harness enforces **explicit user confirmation** before proceeding:
 
-- **Spec approval**: Only clear affirmatives ("go", "proceed", "approve", etc.) are accepted. Ambiguous responses trigger re-confirmation.
+- **Spec approval**: Only clear affirmatives are accepted. Ambiguous responses trigger re-confirmation.
 - **QA retry**: When the Evaluator reports FAIL, the harness asks the user before starting another round.
 
-### Evaluator Modes
+### Language Support
 
-- **Test + Code Review**: When test commands are detected, runs tests first then reviews code
-- **Code Review Only**: When no tests are available, performs thorough code review against 5 criteria
+The harness communicates in the **user's language** -- automatically detected from the task description. All templates are written in English for token efficiency and global compatibility, but all user-facing output (messages, spec, QA reports) is generated in the detected language. Language changes mid-conversation are also detected.
 
 ### Options
 
@@ -113,10 +129,6 @@ The harness discovers skills by **capability keyword** (e.g. "brainstorming", "t
 | Evaluator | "verification-before-completion", "verification" | superpowers:verification-before-completion |
 
 If no matching skill is found, the harness proceeds without it. No specific plugin is required.
-
-### Language Matching
-
-The harness detects the language of the user's task description and communicates all progress updates, spec sections, QA criteria, and reports in the same language.
 
 ## License
 
