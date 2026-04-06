@@ -1,7 +1,7 @@
 {
   "name": "agent-harness",
   "description": "3-Phase (Planner, Generator, Evaluator) development workflow for Claude Code — no dependencies required",
-  "version": "4.0.1",
+  "version": "4.1.0",
   "author": {
     "name": "Lee-JungGu"
   },
