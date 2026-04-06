@@ -1,6 +1,6 @@
 # Single/Multi Mode Selection Design
 
-v4.0.0의 다중 에이전트 페르소나와 v3.0.0의 단일 에이전트 방식을 사용자가 선택할 수 있도록 고도화한다.
+v4.0.1의 다중 에이전트 페르소나와 v3.0.0의 단일 에이전트 방식을 사용자가 선택할 수 있도록 고도화한다.
 
 ## 배경
 
@@ -92,7 +92,7 @@ SKILL.md의 Step 2에서 mode에 따라 분기:
 
 #### Multi 모드 (Step 2-M)
 
-기존 v4.0.0 그대로:
+기존 v4.0.1 그대로:
 - Step 2a: 3 독립 제안 (architect, senior_developer, qa_specialist) 병렬
 - Step 2b: 3 교차비평 (cross_critique) 병렬
 - Step 2c: 1 합성 (synthesis) → spec.md
@@ -119,7 +119,7 @@ SKILL.md의 Step 4에서 mode에 따라 분기:
 
 #### Multi 모드 (Step 4-M)
 
-기존 v4.0.0 그대로:
+기존 v4.0.1 그대로:
 - Step 4a: Lead Developer가 plan.md 작성 (서브에이전트)
 - Step 4b: 2 어드바이저 병렬 리뷰
 - Step 4c: Lead Developer가 어드바이저 피드백 반영하여 구현 (서브에이전트)
@@ -177,7 +177,7 @@ Step 1의 변경 사항:
 - [ ] 인자 없이 호출 시 Setup 직후 모드 선택 질문 표시
 - [ ] Single 모드: Planner가 1 에이전트로 spec.md 작성
 - [ ] Single 모드: Generator가 1 에이전트로 구현 + changes.md 작성
-- [ ] Multi 모드: 기존 v4.0.0 워크플로우 그대로 동작
+- [ ] Multi 모드: 기존 v4.0.1 워크플로우 그대로 동작
 - [ ] state.json에 mode 필드 저장, 세션 복구 시 모드 유지 및 표시
 - [ ] Evaluator, Verdict, Cleanup은 모드 무관하게 동일 동작
 - [ ] README.md에 모드 선택 옵션 문서화
