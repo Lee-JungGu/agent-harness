@@ -1,17 +1,43 @@
 # Agent Harness
 
-**Zero-setup, zero-dependency** 3-Phase (Planner -> Generator -> Evaluator) development workflow for Claude Code with **selectable single-agent or multi-agent persona mode**.
+**Zero-setup, zero-dependency** 3-Phase development workflow for Claude Code with **selectable single-agent or multi-agent persona mode**.
 
 No dependencies required. No Python, no pip, no build steps -- just install the plugin and go.
 
 Inspired by Anthropic's [Harness Design for Long-Running Application Development](https://www.anthropic.com/engineering/harness-design-long-running-apps).
 
-## What it does
+## Skills
+
+| Skill | Command | Description |
+|-------|---------|-------------|
+| **Workflow** | `/harness-workflow <task>` | 3-Phase (Planner -> Generator -> Evaluator) development workflow. Single or multi-agent mode. |
+| **Optimize** | `/harness-optimize` | Optimize CLAUDE.md and project `.md` files for token efficiency. |
+
+## Install
+
+```bash
+claude plugin marketplace add Lee-JungGu/agent-harness
+claude plugin install agent-harness@agent-harness-marketplace
+```
+
+## Quick Start
+
+```
+/harness-workflow fix login timeout bug                    # asks for mode
+/harness-workflow fix login timeout bug --mode single      # fast, token-saving
+/harness-workflow fix login timeout bug --mode multi       # deep multi-agent analysis
+
+/harness-optimize                                          # optimize markdown files
+```
+
+---
+
+## harness-workflow
 
 Separates planning, implementation, and review into distinct phases with file-based handoffs. Each phase uses **specialized sub-agents with expert personas** that collaborate through structured debate and review patterns, eliminating single-agent blind spots.
 
 ```
-/agent-harness:harness  -> [Setup] Auto-detect + mode selection (single / multi)
+/harness-workflow  -> [Setup] Auto-detect + mode selection (single / multi)
                         -> [Phase 1] Planner
                            single: 1 agent explores + writes spec.md
                            multi:  3 specialists propose independently
@@ -29,25 +55,6 @@ Separates planning, implementation, and review into distinct phases with file-ba
 
 Claude handles everything directly -- no external CLI, no wrapper scripts. The plugin skill guides Claude through each phase natively.
 
-## Install
-
-```bash
-claude plugin marketplace add Lee-JungGu/agent-harness
-claude plugin install agent-harness@agent-harness-marketplace
-```
-
-## Usage
-
-Once installed, use in any Claude Code session:
-
-```
-/agent-harness:harness fix login timeout bug                    # asks for mode
-/agent-harness:harness fix login timeout bug --mode single      # fast, token-saving
-/agent-harness:harness fix login timeout bug --mode multi       # deep multi-agent analysis
-```
-
-That's it. No initialization, no repo registration, no configuration files needed. The harness auto-detects your project language, test commands, and build commands from project files.
-
 ### Auto-Detection
 
 The harness detects language, test, and build commands from your project files:
@@ -62,12 +69,12 @@ The harness detects language, test, and build commands from your project files:
 | `go.mod` | Go | `go test ./...` | `go build ./...` |
 | `Cargo.toml` | Rust | `cargo test` | `cargo build` |
 
-## How it works
+### How it works
 
 1. You invoke the harness skill with a task description
 2. **Setup**: Auto-detects language/test/build, detects your language, creates `.harness/state.json` and `docs/harness/<task-slug>/`, creates a `harness/*` git branch
 
-### Phase 1 -- Planner (Multi-Agent)
+#### Phase 1 -- Planner (Multi-Agent)
 
 Three specialist personas analyze the task **independently and in parallel**:
 
@@ -83,7 +90,7 @@ After independent proposals, each specialist **cross-critiques** the other two p
 
 4. **Confirmation Gate**: Claude shows the spec and waits for explicit user approval before proceeding. Ambiguous responses are re-confirmed.
 
-### Phase 2 -- Generator (Lead + Advisors)
+#### Phase 2 -- Generator (Lead + Advisors)
 
 A single Lead Developer owns the implementation for code coherence, supported by an advisory panel:
 
@@ -95,7 +102,7 @@ A single Lead Developer owns the implementation for code coherence, supported by
 
 The advisory review happens **before code is written**, catching issues when they're cheap to fix rather than expensive to rework.
 
-### Phase 3 -- Evaluator (Isolated)
+#### Phase 3 -- Evaluator (Isolated)
 
 Runs as an isolated sub-agent with research-backed bias reduction:
 
@@ -113,18 +120,38 @@ Runs as an isolated sub-agent with research-backed bias reduction:
 
 ### Token Cost vs. Quality Trade-off
 
-Choose the mode that fits your task:
-
 | Mode | Best for | Token cost |
 |------|----------|------------|
 | **single** | Small bug fixes, simple features, quick iterations | Baseline |
 | **multi** | Complex features, architectural changes, high-stakes code | ~1.7x baseline |
 
-v4.3.0: New `md-optimize` skill for token-efficient markdown restructuring. All templates optimized for token efficiency (~27% reduction in template overhead). The multi-agent approach uses more tokens per run, but the higher first-pass success rate often reduces total cost by avoiding expensive retry rounds.
+The multi-agent approach uses more tokens per run, but the higher first-pass success rate often reduces total cost by avoiding expensive retry rounds.
+
+### Options
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| mode | (ask user) | `single` for fast/token-saving, `multi` for deep multi-agent analysis |
+| scope | auto-detected | Restrict file modifications to a pattern |
+| max rounds | 3 | Maximum Generator/Evaluator retry cycles |
+| max files | 20 | Maximum number of files that can be modified |
+
+Example: `/harness-workflow fix auth bug --mode single --scope "src/auth/**" --max-rounds 5`
 
 ### Session Recovery
 
 If a session is interrupted, the harness detects the existing `.harness/state.json` on next invocation and offers to resume from where you left off.
+
+### Confirmation Gates
+
+The Generator phase consumes significant tokens and is hard to undo. The harness enforces **explicit user confirmation** before proceeding:
+
+- **Spec approval**: Only clear affirmatives are accepted. Ambiguous responses trigger re-confirmation.
+- **QA retry**: When the Evaluator reports FAIL, the harness asks the user before starting another round.
+
+### Language Support
+
+The harness communicates in the **user's language** -- automatically detected from the task description. All templates are written in English for token efficiency and global compatibility, but all user-facing output (messages, spec, QA reports) is generated in the detected language.
 
 ### File Structure
 
@@ -149,30 +176,6 @@ docs/harness/<task-slug>/
   qa_report.md                      # Evaluator output (preserved)
 ```
 
-### Confirmation Gates
-
-The Generator phase consumes significant tokens and is hard to undo. The harness enforces **explicit user confirmation** before proceeding:
-
-- **Spec approval**: Only clear affirmatives are accepted. Ambiguous responses trigger re-confirmation.
-- **QA retry**: When the Evaluator reports FAIL, the harness asks the user before starting another round.
-
-### Language Support
-
-The harness communicates in the **user's language** -- automatically detected from the task description. All templates are written in English for token efficiency and global compatibility, but all user-facing output (messages, spec, QA reports) is generated in the detected language. Language changes mid-conversation are also detected.
-
-### Options
-
-You can pass options in conversation when invoking the harness:
-
-| Option | Default | Description |
-|--------|---------|-------------|
-| mode | (ask user) | `single` for fast/token-saving, `multi` for deep multi-agent analysis |
-| scope | auto-detected | Restrict file modifications to a pattern |
-| max rounds | 3 | Maximum Generator/Evaluator retry cycles |
-| max files | 20 | Maximum number of files that can be modified |
-
-Example: `/agent-harness:harness fix auth bug --mode single --scope "src/auth/**" --max-rounds 5`
-
 ### Plugin Compatibility
 
 The harness discovers skills by **capability keyword** (e.g. "brainstorming", "tdd", "code-review"), not by plugin name. It works with any installed plugin that provides matching skills:
@@ -189,12 +192,14 @@ The harness discovers skills by **capability keyword** (e.g. "brainstorming", "t
 
 If no matching skill is found, the harness proceeds without it. No specific plugin is required.
 
-## MD Optimize Skill (v4.3.0)
+---
+
+## harness-optimize
 
 A standalone utility skill that optimizes your project's CLAUDE.md and markdown files for token efficiency.
 
 ```
-/agent-harness:md-optimize
+/harness-optimize
 ```
 
 **What it does:**
@@ -204,6 +209,8 @@ A standalone utility skill that optimizes your project's CLAUDE.md and markdown 
 - **Auto-generation**: If no `.md` files exist, analyzes the project and generates appropriate documentation (minimal/standard/comprehensive levels)
 
 **Safety features**: Git-based rollback, HARD GATE confirmation before any changes, YAML frontmatter preservation, idempotency markers for safe re-runs.
+
+---
 
 ## License
 

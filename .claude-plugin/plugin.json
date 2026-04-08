@@ -1,11 +1,11 @@
 {
   "name": "agent-harness",
   "description": "3-Phase (Planner, Generator, Evaluator) development workflow for Claude Code — no dependencies required",
-  "version": "4.3.0",
+  "version": "4.4.0",
   "author": {
     "name": "Lee-JungGu"
   },
   "repository": "https://github.com/Lee-JungGu/agent-harness",
   "license": "MIT",
-  "keywords": ["harness", "workflow", "planner", "generator", "evaluator", "multi-agent", "md-optimize", "token-efficiency"]
+  "keywords": ["harness-workflow", "harness-optimize", "planner", "generator", "evaluator", "multi-agent", "token-efficiency"]
 }

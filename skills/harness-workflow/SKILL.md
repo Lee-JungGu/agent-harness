@@ -1,5 +1,5 @@
 ---
-name: harness
+name: harness-workflow
 description: 3-Phase (Planner -> Generator -> Evaluator) development workflow with selectable single-agent or multi-agent persona mode. Use when starting feature work, bug fixes, or maintenance tasks that benefit from structured planning, implementation, and review.
 ---
 
