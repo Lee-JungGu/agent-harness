@@ -26,7 +26,8 @@ claude plugin install agent-harness@agent-harness-marketplace
 ```
 /workflow fix login timeout bug                    # asks for mode
 /workflow fix login timeout bug --mode single      # fast, token-saving
-/workflow fix login timeout bug --mode multi       # deep multi-agent analysis
+/workflow fix login timeout bug --mode standard    # balanced analysis, ~1.5x tokens
+/workflow fix login timeout bug --mode multi       # deep multi-agent analysis, ~2-2.5x tokens
 
 /md-optimize                                       # optimize markdown files
 /md-generate                                       # analyze project & generate CLAUDE.md
@@ -39,18 +40,23 @@ claude plugin install agent-harness@agent-harness-marketplace
 Separates planning, implementation, and review into distinct phases with file-based handoffs. Each phase uses **specialized sub-agents with expert personas** that collaborate through structured debate and review patterns, eliminating single-agent blind spots.
 
 ```
-/workflow  -> [Setup] Auto-detect + mode selection (single / multi)
+/workflow  -> [Setup] Auto-detect + mode selection (single / standard / multi)
                         -> [Phase 1] Planner
-                           single: 1 agent explores + writes spec.md
-                           multi:  3 specialists propose independently
-                                   -> Cross-critique: each reviews others
-                                   -> Synthesis: merge into spec.md
+                           single:   1 agent explores + writes spec.md
+                           standard: 2 specialists propose independently
+                                     -> Synthesis: merge into spec.md (no cross-critique)
+                           multi:    3 specialists propose independently
+                                     -> Cross-critique: each reviews others
+                                     -> Synthesis: merge into spec.md
                         -> Confirmation Gate: user approves spec
                         -> [Phase 2] Generator
-                           single: 1 agent implements code
-                           multi:  Lead Developer creates plan
-                                   -> 2 advisors review plan in parallel
-                                   -> Lead Developer codes with feedback
+                           single:   1 agent implements code
+                           standard: Lead Developer creates plan
+                                     -> 1 combined advisor reviews plan
+                                     -> Lead Developer codes with feedback
+                           multi:    Lead Developer creates plan
+                                     -> 2 advisors review plan in parallel
+                                     -> Lead Developer codes with feedback
                         -> [Phase 3] Evaluator (isolated subagent): test + review
                         -> PASS -> Done / FAIL -> Back to Phase 2 (max N rounds)
 ```
@@ -78,6 +84,8 @@ The harness detects language, test, and build commands from your project files:
 
 #### Phase 1 -- Planner (Multi-Agent)
 
+> **Standard mode** uses only the Architect and Senior Developer personas (no QA Specialist, no cross-critique). See the full mode comparison in the Token Cost table above.
+
 Three specialist personas analyze the task **independently and in parallel**:
 
 | Persona | Focus |
@@ -93,6 +101,8 @@ After independent proposals, each specialist **cross-critiques** the other two p
 4. **Confirmation Gate**: Claude shows the spec and waits for explicit user approval before proceeding. Ambiguous responses are re-confirmed.
 
 #### Phase 2 -- Generator (Lead + Advisors)
+
+> **Standard mode** uses a single Combined Advisor (merged Code Quality + Test & Stability perspectives) instead of two separate advisors.
 
 A single Lead Developer owns the implementation for code coherence, supported by an advisory panel:
 
@@ -122,18 +132,19 @@ Runs as an isolated sub-agent with research-backed bias reduction:
 
 ### Token Cost vs. Quality Trade-off
 
-| Mode | Best for | Token cost |
-|------|----------|------------|
-| **single** | Small bug fixes, simple features, quick iterations | Baseline |
-| **multi** | Complex features, architectural changes, high-stakes code | ~1.7x baseline |
+| Mode | Best for | Token cost | Quality vs single |
+|------|----------|------------|-------------------|
+| **single** | Small bug fixes, simple features, quick iterations | Baseline | Baseline |
+| **standard** | General features, API changes, moderate complexity | ~1.5x baseline | +60-70% |
+| **multi** | Complex features, architectural changes, high-stakes code | ~2-2.5x baseline | +85-95% |
 
-The multi-agent approach uses more tokens per run, but the higher first-pass success rate often reduces total cost by avoiding expensive retry rounds.
+Higher modes use more tokens per run but have higher first-pass success rates, often reducing total cost by avoiding retry rounds. Standard mode is recommended for most tasks — it provides significant quality improvement at modest token cost.
 
 ### Options
 
 | Option | Default | Description |
 |--------|---------|-------------|
-| mode | (ask user) | `single` for fast/token-saving, `multi` for deep multi-agent analysis |
+| mode | (ask user) | `single` for fast/token-saving, `standard` for balanced analysis, `multi` for deep multi-agent analysis |
 | scope | auto-detected | Restrict file modifications to a pattern |
 | max rounds | 3 | Maximum Generator/Evaluator retry cycles |
 | max files | 20 | Maximum number of files that can be modified |
