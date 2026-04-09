@@ -1,11 +1,11 @@
 {
   "name": "agent-harness",
-  "description": "3-Phase development workflow, staged migration, and markdown optimization for Claude Code — no dependencies required",
-  "version": "5.5.0",
+  "description": "3-Phase development workflow, safe refactoring, staged migration, and markdown optimization for Claude Code — no dependencies required",
+  "version": "5.6.0",
   "author": {
     "name": "Jugger"
   },
   "repository": "https://github.com/Jugger0716/agent-harness",
   "license": "MIT",
-  "keywords": ["workflow", "migrate", "codebase-audit", "code-review", "md-optimize", "md-generate", "planner", "generator", "evaluator", "multi-agent", "token-efficiency"]
+  "keywords": ["workflow", "refactor", "migrate", "codebase-audit", "code-review", "md-optimize", "md-generate", "planner", "generator", "evaluator", "multi-agent", "token-efficiency", "behavior-preservation"]
 }

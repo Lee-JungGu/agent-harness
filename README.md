@@ -11,6 +11,7 @@ Inspired by Anthropic's [Harness Design for Long-Running Application Development
 | Skill | Command | Description |
 |-------|---------|-------------|
 | **Workflow** | `/workflow <task>` | 3-Phase (Planner -> Generator -> Evaluator) development workflow. Single or multi-agent mode. |
+| **Refactor** | `/refactor <target>` | Safe, behavior-preserving code structure improvement. Single, multi, or comprehensive mode. |
 | **Migrate** | `/migrate <target> [--from v4 --to v5]` | Staged migration of frameworks, libraries, and dependencies. Single or multi-agent mode with WebSearch research. |
 | **Codebase Audit** | `/codebase-audit` | Systematic codebase analysis with 3-tier mode (quick/deep/thorough) for team onboarding. |
 | **Code Review** | `/code-review <target>` | Systematic, bias-free code review. Quick (1 agent), deep (2 specialists), or thorough (3 specialists + cross-verification). |
@@ -39,6 +40,10 @@ claude plugin install agent-harness@agent-harness-marketplace
 /code-review #123                                  # review PR, asks for mode
 /code-review feature/auth --mode deep              # review branch diff, deep mode
 /code-review --staged --mode quick                 # review staged changes, quick
+
+/refactor extract auth logic from UserController    # asks for mode
+/refactor reduce coupling in src/services/ --mode single
+/refactor restructure data layer --mode comprehensive
 
 /migrate react --from 17 --to 18                   # staged React migration
 /migrate replace moment with dayjs                 # library replacement
@@ -219,6 +224,119 @@ The harness discovers skills by **capability keyword** (e.g. "brainstorming", "t
 | Evaluator | "verification-before-completion", "verification" | superpowers:verification-before-completion |
 
 If no matching skill is found, the harness proceeds without it. No specific plugin is required.
+
+---
+
+## refactor
+
+Safe, behavior-preserving code structure improvement. Separates impact analysis, atomic execution with safety checks, and isolated verification into distinct phases. "Same behavior, better structure."
+
+```
+/refactor  -> [Setup] Auto-detect + git safety + baseline tests + mode selection
+                        -> [Phase 1] Impact Analysis
+                           single:        1 agent analyzes + writes refactor_plan.md
+                           multi:         2 specialists analyze independently
+                                          -> Synthesis: merge into refactor_plan.md
+                           comprehensive: 3 specialists analyze independently
+                                          -> Cross-verification: each reviews others
+                                          -> Synthesis: merge into refactor_plan.md
+                        -> Confirmation Gate: user approves plan
+                        -> [Phase 2] Execution (atomic steps)
+                           single:              1 agent applies changes step-by-step
+                           multi/comprehensive:  Safety Advisor reviews each step
+                                                 -> Execute + test after each
+                           On test failure: STOP immediately (no auto-fix)
+                        -> [Phase 3] Verification (isolated subagent)
+                           Compare tests with baseline -> PASS/FAIL
+```
+
+### Modes
+
+| Mode | Best for | Analysis | Execution | Token cost |
+|------|----------|----------|-----------|------------|
+| **single** | File/function level (< 3 files) | 1 agent | 1 agent, step-by-step | 1x |
+| **multi** | Module level (3-10 files) | 2 analysts + synthesis | Lead Dev + Safety Advisor | ~1.7x |
+| **comprehensive** | Architecture level (10+ files) | 3 analysts + cross-verify + synthesis | Lead Dev + Safety Advisor | ~2.5x |
+
+### Core Principles
+
+- **Atomic changes**: One refactoring step at a time
+- **Test after each step**: Run full test suite between every change
+- **Stop on failure**: No auto-fix. Report and ask the user
+- **Baseline capture**: Snapshot test results before starting
+
+### Phase 1 — Impact Analysis
+
+Analysts examine the target code independently:
+
+| Persona | Focus | Modes |
+|---------|-------|-------|
+| **Structural Analyst** | Dependencies, coupling, cohesion, complexity | multi, comprehensive |
+| **Risk Analyst** | Impact scope, breakage risk, test coverage gaps | multi, comprehensive |
+| **Feasibility Analyst** | Framework constraints, practical blockers, hidden deps | comprehensive only |
+
+**comprehensive** adds cross-verification: each analyst reviews the other two analyses before synthesis, catching assumptions that synthesis alone would miss.
+
+### Phase 2 — Execution
+
+Changes are applied one step at a time with mandatory testing between each:
+
+| Event | Action |
+|-------|--------|
+| Step complete, tests pass | Continue to next step |
+| Step complete, new test failure | **STOP**. Report regression. User decides: revert / fix / abort |
+| Safety Advisor says STOP (multi/comprehensive) | Report to user. Skip / modify / abort |
+| No test suite available | Code review for behavior equivalence instead |
+
+### Phase 3 — Verification (Isolated)
+
+Runs as an isolated sub-agent with the same bias-reduction techniques as workflow:
+- **Context isolation** (separate subagent)
+- **Anchor-free input** (no execution reasoning passed)
+- **Baseline comparison** (tests compared against captured baseline)
+- **Behavior-first criteria** (behavior preservation is the primary criterion)
+
+### Error Handling
+
+| Scenario | Action |
+|----------|--------|
+| No test suite | Warn + proceed with code review only |
+| No tests cover target | Suggest writing tests first |
+| Baseline tests failing | Report + ask user (fix first or proceed) |
+| Test regression mid-refactor | Stop immediately, report, user decides |
+
+### Smart Routing
+
+| Finding | Suggestion |
+|---------|-----------|
+| User wants new features | `/workflow` |
+| Version/dependency issues | `/migrate` |
+| Needs codebase understanding first | `/codebase-audit` |
+
+### Session Recovery
+
+If a session is interrupted, the harness detects the existing `.harness/state.json` on next invocation and offers to resume from where you left off.
+
+### File Structure
+
+```
+.harness/
+  state.json                        # Working state (temporary)
+  context.md                        # Shared context (multi/comprehensive)
+  refactor/
+    analysis_structural.md          # Structural Analyst's analysis
+    analysis_risk.md                # Risk Analyst's analysis
+    analysis_feasibility.md         # Feasibility Analyst's analysis (comprehensive)
+    critique_structural.md          # Cross-verification (comprehensive)
+    critique_risk.md                # Cross-verification (comprehensive)
+    critique_feasibility.md         # Cross-verification (comprehensive)
+    baseline_tests.txt              # Captured baseline test output
+
+docs/harness/<slug>/
+  refactor_plan.md                  # Analysis output (preserved)
+  changes.md                        # Execution output (preserved)
+  qa_report.md                      # Verification output (preserved)
+```
 
 ---
 
