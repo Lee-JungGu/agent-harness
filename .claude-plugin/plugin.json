@@ -1,11 +1,11 @@
 {
   "name": "agent-harness",
   "description": "3-Phase (Planner, Generator, Evaluator) development workflow for Claude Code — no dependencies required",
-  "version": "5.1.0",
+  "version": "5.3.0",
   "author": {
     "name": "Jugger"
   },
   "repository": "https://github.com/Jugger0716/agent-harness",
   "license": "MIT",
-  "keywords": ["workflow", "md-optimize", "md-generate", "planner", "generator", "evaluator", "multi-agent", "token-efficiency"]
+  "keywords": ["workflow", "codebase-audit", "code-review", "md-optimize", "md-generate", "planner", "generator", "evaluator", "multi-agent", "token-efficiency"]
 }

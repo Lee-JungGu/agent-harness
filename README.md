@@ -11,6 +11,8 @@ Inspired by Anthropic's [Harness Design for Long-Running Application Development
 | Skill | Command | Description |
 |-------|---------|-------------|
 | **Workflow** | `/workflow <task>` | 3-Phase (Planner -> Generator -> Evaluator) development workflow. Single or multi-agent mode. |
+| **Codebase Audit** | `/codebase-audit` | Systematic codebase analysis with 3-tier mode (quick/deep/thorough) for team onboarding. |
+| **Code Review** | `/code-review <target>` | Systematic, bias-free code review. Quick (1 agent), deep (2 specialists), or thorough (3 specialists + cross-verification). |
 | **MD Optimize** | `/md-optimize` | Optimize CLAUDE.md and project `.md` files for token efficiency. |
 | **MD Generate** | `/md-generate` | Analyze project and generate/enhance CLAUDE.md for effective Claude Code development. |
 
@@ -28,6 +30,14 @@ claude plugin install agent-harness@agent-harness-marketplace
 /workflow fix login timeout bug --mode single      # fast, token-saving
 /workflow fix login timeout bug --mode standard    # balanced analysis, ~1.5x tokens
 /workflow fix login timeout bug --mode multi       # deep multi-agent analysis, ~2-2.5x tokens
+
+/codebase-audit                                    # auto-recommends mode based on project size
+/codebase-audit --mode thorough                    # comprehensive multi-agent analysis
+/codebase-audit --scope "src/**" --incremental     # analyze only changes in src/
+
+/code-review #123                                  # review PR, asks for mode
+/code-review feature/auth --mode deep              # review branch diff, deep mode
+/code-review --staged --mode quick                 # review staged changes, quick
 
 /md-optimize                                       # optimize markdown files
 /md-generate                                       # analyze project & generate CLAUDE.md
@@ -204,6 +214,135 @@ The harness discovers skills by **capability keyword** (e.g. "brainstorming", "t
 | Evaluator | "verification-before-completion", "verification" | superpowers:verification-before-completion |
 
 If no matching skill is found, the harness proceeds without it. No specific plugin is required.
+
+---
+
+## codebase-audit
+
+A standalone utility skill that systematically analyzes project structure, dependencies, and patterns for team onboarding and codebase understanding.
+
+```
+/codebase-audit
+/codebase-audit --mode deep --scope "src/**"
+/codebase-audit --incremental
+```
+
+**What it does:**
+- **Structure analysis**: Maps directory layout, module boundaries, entry points, and architecture patterns
+- **Dependency analysis** (deep+): Internal module dependencies, circular references, external package health
+- **Pattern detection** (deep+): Design patterns, naming conventions, anti-patterns, consistency assessment
+- **Complexity hotspots** (deep+): Top 10 files ranked by complexity indicators
+- **Incremental mode**: Reuses prior audit, analyzes only changed files since last run
+
+### Modes
+
+| Mode | Agents | Best for | Token cost |
+|------|--------|----------|------------|
+| **quick** | 1 sequential | Small projects, quick overview | 1x |
+| **deep** | 2 parallel + synthesis | Mid-size projects, general analysis | ~1.5x |
+| **thorough** | 3 parallel + cross-verification + synthesis | Large/legacy projects, team onboarding | ~2.5x |
+
+Mode is auto-recommended based on file count (< 30: quick, 30-200: deep, 200+: thorough) but can be overridden with `--mode`.
+
+### Options
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| mode | (recommended) | `quick` for overview, `deep` for detailed analysis, `thorough` for comprehensive |
+| scope | (full project) | Restrict analysis to a glob pattern |
+| incremental | off | Reuse prior audit, analyze only changed files |
+
+### Output
+
+Report saved to `docs/harness/<slug>/audit_report.md` with sections:
+- Project Overview, Module Map
+- Dependency Graph (deep+), Pattern Analysis (deep+)
+- Complexity Hotspots top 10 (deep+)
+- Recommended Next Steps (smart routing to other skills)
+- Metadata (git HEAD, date, mode — enables incremental)
+
+### Smart Routing
+
+After analysis, suggests relevant next steps based on findings:
+- Anti-patterns detected -> `/refactor`
+- Outdated versions -> `/migrate`
+- No CLAUDE.md -> `/md-generate`
+
+**Safety features**: Read-only (never modifies source code), no git branches created, confirmation gate for deep/thorough modes.
+
+---
+
+## code-review
+
+A standalone review skill that performs systematic, bias-free code reviews on PRs, branches, commits, or file diffs.
+
+```
+/code-review #123                    # review a PR
+/code-review feature/auth            # review branch diff vs main
+/code-review abc1234..def5678        # review commit range
+/code-review --staged                # review staged changes
+/code-review #123 --mode thorough    # force thorough mode
+```
+
+**What it does:**
+- **3-tier depth control**: quick (1 agent, 5-perspective checklist), deep (2 specialist sub-agents + synthesis), thorough (3 specialists + cross-verification + synthesis)
+- **Bias reduction**: context isolation, anchor-free input (no PR descriptions/commit messages), defect-assumption framing, author neutralization
+- **Smart scope routing**: recommends review depth based on diff size (< 100 lines -> quick, 100-500 -> deep, 500+ -> thorough)
+- **Structured findings**: each finding has severity (Critical/Major/Minor/Suggestion), category, file:line, description, and concrete fix suggestion
+- **Smart routing**: suggests next actions based on findings (e.g., `/workflow` for critical fixes)
+
+### Modes
+
+| Mode | Sub-agents | Process | Token cost |
+|------|-----------|---------|------------|
+| **quick** | 0 (inline) | 5-perspective checklist | ~1x |
+| **deep** | 2 | Security & Correctness + Architecture & Maintainability -> synthesis | ~1.5x |
+| **thorough** | 3 + 3 | Security & Correctness + Architecture & Design + DX & Maintainability -> cross-verification -> synthesis | ~2.5x |
+
+### Deep Mode
+
+Two specialist reviewers analyze the diff independently and in parallel:
+
+| Reviewer | Focus |
+|----------|-------|
+| **Security & Correctness** | Vulnerabilities, logic errors, input validation, error handling |
+| **Architecture & Maintainability** | Design patterns, code organization, testing, performance, naming |
+
+The main agent synthesizes both reviews into a unified report, deduplicating findings and resolving severity disagreements.
+
+### Thorough Mode
+
+Three specialist reviewers analyze independently and in parallel, then cross-verify each other's findings:
+
+| Reviewer | Focus |
+|----------|-------|
+| **Security & Correctness** | Vulnerabilities, logic errors, input validation, error handling |
+| **Architecture & Design** | System structure, abstractions, coupling, API design, scalability |
+| **DX & Maintainability** | Readability, naming, testing, performance, conventions |
+
+After initial review, three cross-verification sub-agents validate each other's findings against the actual diff -- confirming real issues, flagging false positives, and catching missed problems. The main agent then synthesizes all 6 documents.
+
+### Bias Reduction Techniques
+
+| Technique | Applies to | Purpose |
+|-----------|-----------|---------|
+| Context isolation (separate sub-agents) | deep, thorough | Each reviewer forms independent judgment |
+| Anchor-free input (no PR description/commit messages) | all modes | Prevents framing bias from author's narrative |
+| Defect-assumption framing | all modes | "Assume defects, find them" vs. "confirm correctness" |
+| Author neutralization | all modes | No author identity -> merit-based review |
+| Cross-verification | thorough | Catches false positives and missed issues |
+
+### Output
+
+Review report saved to `docs/harness/<slug>/review_report.md` with:
+- **Assessment**: APPROVE / REQUEST_CHANGES / COMMENT (deterministic from findings)
+- **Findings table**: severity, category, file:line, description, suggestion
+- **Statistics**: finding counts by severity
+- **Smart routing**: suggests next actions based on finding patterns
+
+### Language Support
+
+Communicates in the user's language. Report content is in the detected language. Assessment line (`## Assessment: APPROVE/REQUEST_CHANGES/COMMENT`) stays in English for programmatic parsing.
 
 ---
 
