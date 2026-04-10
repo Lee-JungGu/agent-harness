@@ -63,32 +63,34 @@ When the user invokes `/codebase-audit`, execute this workflow:
    > "[harness] No source files found in the project. Nothing to audit."
 
 6. **Error check — large project without scope:**
-   If file count > 500 and no `--scope` provided, suggest scope restriction (in `user_lang`):
-   > "[harness] Project has N files. Consider narrowing scope for faster, more focused analysis.
-   > Suggested scopes based on directory structure:
-   >   --scope "src/**"
-   >   --scope "lib/**"
-   >   --scope "packages/core/**"
-   > Proceed with full project scan? (proceed / set scope)"
+   If file count > 500 and no `--scope` provided, suggest scope restriction using AskUserQuestion (in `user_lang`):
+     header: "Scope"
+     question: "Project has {N} files. Narrowing scope produces faster, more focused analysis."
+     options:
+       - label: "Use suggested scope" / description: "Limit analysis to {suggested} (auto-detected from directory structure)"
+       - label: "Full scan" / description: "Analyze all {N} files in the project"
+     "Other" allows custom scope pattern (e.g. `src/**`, `lib/**`).
 
-   If user sets scope, apply it. If user proceeds, continue with full project.
+   Where `{suggested}` is determined by scanning top-level directories for common source paths (e.g. `src/**`, `lib/**`, `packages/core/**`).
 
-7. **Scope-aware mode recommendation.** If `--mode` was not provided:
+   If user selects "Use suggested scope", apply the suggested scope. If user selects "Full scan", continue with full project. If user provides a custom scope via "Other", apply it.
 
+7. **Scope-aware mode recommendation.** If `--mode` was not provided, use AskUserQuestion (in `user_lang`):
+     header: "Audit Mode"
+     question: "Select audit mode: ({N} files in scope)"
+     options:
+       - label: "quick" / description: "Overview: structure, tech stack, entry points (~1x tokens)"
+       - label: "deep" / description: "Detailed: + dependency graph, patterns, hotspots (~1.5x tokens)"
+       - label: "thorough" / description: "Comprehensive: + cross-verification, deep graph traversal (~2.5x tokens)"
+
+   Auto-recommend based on file count by appending "(Recommended)" to the matching label:
    | File count | Recommended mode |
    |-----------|-----------------|
    | < 30 | `quick` |
    | 30 - 200 | `deep` |
    | 200+ or monorepo detected | `thorough` |
 
-   Present recommendation to user (in `user_lang`):
-   > "[harness] Project has N files. Recommended mode: {mode}.
-   >   (1) quick    — overview: structure, tech stack, entry points (~1x tokens)
-   >   (2) deep     — detailed: + dependency graph, patterns, hotspots (~1.5x tokens)
-   >   (3) thorough — comprehensive: + cross-verification, deep graph traversal (~2.5x tokens)
-   > Select mode: (1/2/3 or quick/deep/thorough)"
-
-   Accept: "1", "2", "3", "quick", "deep", "thorough" (case-insensitive). Re-ask on unrecognized input.
+   Example: if 150 files in scope, the "deep" option label becomes `"deep (Recommended)"`.
 
    If `--mode` was provided, use it directly and skip the prompt.
 
@@ -111,17 +113,17 @@ When the user invokes `/codebase-audit`, execute this workflow:
 9. **Confirmation gate for deep/thorough modes:**
 
    <HARD-GATE>
-   If mode is `deep` or `thorough`, present confirmation (in `user_lang`):
-   > "[harness] {mode} mode uses ~{cost}x tokens compared to quick mode. Proceed? (proceed / switch to {lower_mode})"
+   If mode is `deep` or `thorough`, present confirmation using AskUserQuestion (in `user_lang`):
+     header: "Confirm"
+     question: "{mode} mode uses ~{cost}x tokens compared to quick."
+     options:
+       - label: "Proceed" / description: "Start {mode} analysis as configured"
+       - label: "Switch to {lower_mode}" / description: "Use {lower_mode} mode instead (fewer tokens)"
+       - label: "Abort" / description: "Cancel the audit"
 
    Where `{cost}` is "1.5" for deep, "2.5" for thorough, and `{lower_mode}` is "quick" for deep, "deep" for thorough.
 
-   Allowed responses: "go", "proceed", "approve", "yes", "ok", "lgtm", and natural affirmatives in user's language.
-
-   **Ambiguous responses** (hesitation, questions, conditionals) — re-confirm:
-   > "Analysis in {mode} mode consumes significant tokens. Explicit confirmation required. Proceed? (proceed / switch to {lower_mode} / abort)"
-
-   On switch: update mode. On abort: halt.
+   On "Proceed": continue. On "Switch to {lower_mode}": update mode, skip re-confirmation. On "Abort": halt.
    </HARD-GATE>
 
 10. **Model configuration selection (deep and thorough modes only):**
@@ -429,6 +431,15 @@ Each sub-agent is assigned a role. The following table defines the concrete mode
 | Cross-Critique (per analyst) | advisor | (no override) | opus | opus | sonnet |
 
 **Applying model config:** When launching any sub-agent, if `model_config.preset` is not `"default"`, pass the `model` parameter according to the table above for that sub-agent. Sub-agents must NOT directly access `.harness/model_config.json` — the orchestrator passes the model parameter at launch time.
+
+## User Interaction Rules
+
+All user-facing questions MUST use AskUserQuestion tool when available.
+- If AskUserQuestion is available → use it (provides numbered selection UI)
+- If AskUserQuestion is NOT available or fails → present the same options as text and accept number/keyword responses (case-insensitive)
+- Every option must include a `label` (short name) and `description` (specific explanation)
+- "Other" (free text input) is automatically appended by the framework
+- Translate all question text, labels, and descriptions to `user_lang`
 
 ## Key Rules
 
