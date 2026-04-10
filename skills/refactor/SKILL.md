@@ -29,6 +29,7 @@ When displaying status, read `.harness/state.json` and print (in `user_lang`):
   Skill  : refactor
   Target : <target>
   Mode   : <single | multi | comprehensive>
+  Model  : <model_config preset name>
   Phase  : <phase label>
   Branch : <branch>
   Scope  : <scope>
@@ -39,8 +40,9 @@ Phase labels: plan_ready → "Analyzer — writing refactor plan", gen_ready →
 
 Before starting a new task, check if `.harness/state.json` already exists **and** `state.json.skill` equals `"refactor"`:
 
-1. If it exists and matches, print status in the standard format, prefixed with `[harness] Previous refactor session detected.`
-2. Ask the user (in their language) whether to resume, restart, or stop:
+1. If it exists and matches, print status in the standard format (including Model line from `model_config`), prefixed with `[harness] Previous refactor session detected.`
+2. Restore `model_config` from state.json. Apply it to all subsequent sub-agent launches.
+3. Ask the user (in their language) whether to resume, restart, or stop:
    - **Resume**: Jump to the step matching state.json phase:
      `plan_ready` → if refactor_plan.md exists go to Step 3, else Step 2 |
      `gen_ready` → Step 4 | `eval_ready` → Step 5 |
@@ -115,7 +117,34 @@ When the user provides a refactoring target (via $ARGUMENTS or in conversation),
      > (3) comprehensive — 3 analysts + cross-verification + safety advisor (~2.5x tokens)
    - Accept: "1", "2", "3", "single", "multi", "comprehensive" (case-insensitive). Re-ask on unrecognized input.
 
-9. **Shared context collection (multi/comprehensive only):**
+9. **Model configuration selection:**
+   If `--model-config <preset>` was passed, use it directly. Otherwise, ask the user (in `user_lang`):
+
+   If AskUserQuestion tool is available, use it:
+   ```
+   AskUserQuestion(
+     question: "Select model configuration for sub-agents:",
+     options: ["default", "all-opus", "balanced", "economy", "Other"]
+   )
+   ```
+   If AskUserQuestion is NOT available, present as a text question (in `user_lang`):
+   > "Select model configuration for sub-agents:
+   > (1) default — inherit parent model (no override)
+   > (2) all-opus — all sub-agents use Opus
+   > (3) balanced — Sonnet executor + Opus advisor/evaluator
+   > (4) economy — Haiku executor + Sonnet advisor/evaluator
+   > (5) Other — custom (format: executor:model,advisor:model,evaluator:model)
+   > Select: (1-5 or preset name)"
+
+   Accept: "1"-"5", preset names, or custom format (case-insensitive). Re-ask on unrecognized input.
+
+   **If "Other" selected:** Parse custom format `executor:<model>,advisor:<model>,evaluator:<model>`. Validate each model name — only `opus`, `sonnet`, `haiku` are allowed (case-insensitive). If any model name is invalid, inform the user which value is invalid and re-ask for input (max 3 retries, then apply `balanced` as default). If parsing succeeds but is partial, fill missing roles with the `balanced` defaults (executor=sonnet, advisor=opus, evaluator=opus). Show the parsed result to the user and ask for confirmation before proceeding.
+
+   **Model config is set once at session start and cannot be changed mid-session.** To change, restart the session.
+
+   Store result as `model_config` object: `{ "preset": "<name>", "executor": "<model|null>", "advisor": "<model|null>", "evaluator": "<model|null>" }`. For the `default` preset, store `{ "preset": "default" }`.
+
+10. **Shared context collection (multi/comprehensive only):**
    Collect project context once and save to `.harness/context.md`:
    - Directory structure (top 3 levels)
    - Dependency info (package files content)
@@ -123,13 +152,14 @@ When the user provides a refactoring target (via $ARGUMENTS or in conversation),
    - Files in scope (list with brief descriptions)
    This avoids duplicate codebase scans by sub-agents.
 
-10. **Write `.harness/state.json`** with fields: `skill` ("refactor"), `target`, `mode` ("single"/"multi"/"comprehensive"), `user_lang`, `repo_name`, `repo_path`, `phase` ("plan_ready"), `round` (1), `max_rounds` (3), `scope` (user-provided or "(no limit)"), `branch` ("harness/refactor-<slug>"), `lang`, `test_cmd`, `build_cmd`, `test_available` (true/false), `baseline_test_results` (summary string), `baseline_failures` (list of known-failing tests, or []), `docs_path` ("docs/harness/<slug>/"), `created_at` (ISO8601).
-11. **Print setup summary** (in `user_lang`):
+11. **Write `.harness/state.json`** with fields: `skill` ("refactor"), `target`, `mode` ("single"/"multi"/"comprehensive"), `model_config` (from step 9), `user_lang`, `repo_name`, `repo_path`, `phase` ("plan_ready"), `round` (1), `max_rounds` (3), `scope` (user-provided or "(no limit)"), `branch` ("harness/refactor-<slug>"), `lang`, `test_cmd`, `build_cmd`, `test_available` (true/false), `baseline_test_results` (summary string), `baseline_failures` (list of known-failing tests, or []), `docs_path` ("docs/harness/<slug>/"), `created_at` (ISO8601).
+12. **Print setup summary** (in `user_lang`):
     ```
     [harness] Refactor started!
       Repo     : <path>
       Branch   : harness/refactor-<slug>
       Mode     : <single | multi | comprehensive>
+      Model    : <preset name>
       Language : <lang>
       Test     : <test_cmd or "none">
       Build    : <build_cmd or "none">
@@ -188,7 +218,7 @@ If `.harness/context.md` was not created in Setup (e.g., resuming from session r
 
 1. Read two analyst templates from `{CLAUDE_PLUGIN_ROOT}/templates/refactor/`: `structural_analyst.md`, `risk_analyst.md`
 2. For each analyst, fill template variables: `{target_description}`, `{repo_path}`, `{lang}`, `{scope}`, `{user_lang}`, `{context}` (from .harness/context.md), `{test_cmd}`, `{baseline_test_results}` from state.json; `{output_path}`: `.harness/refactor/analysis_<analyst>.md`
-3. **Launch 2 subagents in parallel** using the Agent tool. Each receives its analyst template and context.md, has no knowledge of the other subagent (anchoring prevention), and writes to its output_path.
+3. **Launch 2 subagents in parallel** using the Agent tool. Each receives its analyst template and context.md, has no knowledge of the other subagent (anchoring prevention), and writes to its output_path. If `model_config.preset` is not `"default"`, pass `model` parameter per the Model Selection table (Structural Analyst, Risk Analyst → executor role).
 4. Wait for both to complete. Verify both analysis files exist.
 
 ##### Step 2c-M: Synthesis
@@ -215,7 +245,7 @@ Same as Step 2a-M.
 
 1. Read three analyst templates from `{CLAUDE_PLUGIN_ROOT}/templates/refactor/`: `structural_analyst.md`, `risk_analyst.md`, `feasibility_analyst.md`
 2. For each analyst, fill template variables: same as Step 2b-M, plus `{output_path}`: `.harness/refactor/analysis_<analyst>.md`
-3. **Launch 3 subagents in parallel.** Each receives its analyst template and context.md, has no knowledge of other subagents, and writes to its output_path.
+3. **Launch 3 subagents in parallel.** Each receives its analyst template and context.md, has no knowledge of other subagents, and writes to its output_path. If `model_config.preset` is not `"default"`, pass `model` parameter per the Model Selection table (Structural Analyst, Risk Analyst, Feasibility Analyst → executor role).
 4. Wait for all 3 to complete. Verify all 3 analysis files exist.
 
 ##### Step 2c-C: Cross-Verification (Parallel)
@@ -223,7 +253,7 @@ Same as Step 2a-M.
 1. Read the cross-critique template: `{CLAUDE_PLUGIN_ROOT}/templates/refactor/cross_critique.md`
 2. Read all 3 analysis files from Step 2b-C.
 3. For each analyst, prepare the cross-critique prompt with: `{analyst_name}`, `{target_description}`, `{user_lang}`, `{analysis_1_author}`, `{analysis_1_content}`, `{analysis_2_author}`, `{analysis_2_content}` (the OTHER two analyses), `{output_path}`: `.harness/refactor/critique_<analyst>.md`
-4. **Launch 3 subagents in parallel.** Each writes to `.harness/refactor/critique_<analyst>.md`.
+4. **Launch 3 subagents in parallel.** Each writes to `.harness/refactor/critique_<analyst>.md`. If `model_config.preset` is not `"default"`, pass `model` parameter per the Model Selection table (same executor role as the original analyst).
 5. Wait for all 3 to complete. Verify all 3 critique files exist.
 
 ##### Step 2d-C: Synthesis
@@ -306,7 +336,7 @@ Read `mode` from state.json and branch accordingly.
    a. Announce the step (in `user_lang`): `[harness] Step N: <description>`
    b. Read the safety advisor template: `{CLAUDE_PLUGIN_ROOT}/templates/refactor/safety_advisor.md`
    c. Prepare the safety advisor prompt: `{step_number}`, `{step_description}`, `{files_affected}`, `{refactor_plan_content}` (full plan for context), `{repo_path}`, `{lang}`, `{test_cmd}`, `{user_lang}`, `{previous_steps_summary}` (what was already done)
-   d. **Launch 1 subagent** (Safety Advisor) to review the proposed step BEFORE execution. The Safety Advisor:
+   d. **Launch 1 subagent** (Safety Advisor) to review the proposed step BEFORE execution. If `model_config.preset` is not `"default"`, pass `model` parameter per the Model Selection table (Safety Advisor → advisor role). The Safety Advisor:
       - Verifies the step preserves behavior
       - Identifies any behavioral side effects
       - Gives GO / CAUTION / STOP recommendation
@@ -339,7 +369,7 @@ Read `mode` from state.json and branch accordingly.
 2. Read the evaluator template: `{CLAUDE_PLUGIN_ROOT}/templates/refactor/evaluator.md`
 3. **Prepare the subagent prompt.** Fill in: `{refactor_plan_content}` (structural goals only — strip implementation details), `{changed_files_list}` (file paths only from changes.md — **strip all reasoning** to prevent anchoring), `{test_available}`, `{build_cmd}`, `{test_cmd}`, `{baseline_test_results}`, `{baseline_failures}` (pre-existing failures to ignore), `{round_num}`, `{scope}`, `{user_lang}` from state.json, `{qa_report_path}`: `docs/harness/<slug>/qa_report.md`.
    **Do NOT include:** Execution reasoning, safety advisor assessments, why files were changed, or references to "Generator"/"AI"/"agent" as code author.
-4. **Launch the Evaluator subagent** using the Agent tool. Instruct it to write the QA report to `docs/harness/<slug>/qa_report.md`.
+4. **Launch the Evaluator subagent** using the Agent tool. If `model_config.preset` is not `"default"`, pass `model` parameter per the Model Selection table (Evaluator → evaluator role). Instruct it to write the QA report to `docs/harness/<slug>/qa_report.md`.
 5. When the subagent returns, read `docs/harness/<slug>/qa_report.md` to get the verdict.
 
 ### Step 6: Verdict & Loop
@@ -363,6 +393,41 @@ Ask the user (in `user_lang`) whether to commit the artifacts (refactor_plan.md,
 ### Status Check (anytime)
 
 If user asks for status, print status in the standard format defined above.
+
+## Model Selection
+
+Sub-agents can run on different models depending on the selected `model_config` preset. The presets map each role (executor, advisor, evaluator) to a model:
+
+| Preset | executor | advisor | evaluator |
+|--------|----------|---------|-----------|
+| default | (parent inherit) | (parent inherit) | (parent inherit) |
+| all-opus | opus | opus | opus |
+| balanced | sonnet | opus | opus |
+| economy | haiku | sonnet | sonnet |
+
+Each sub-agent is assigned a role. The following table defines the concrete model for every sub-agent under each preset:
+
+### Analysis Phase Sub-agents
+
+| Sub-agent | Role | default | all-opus | balanced | economy |
+|-----------|------|---------|----------|----------|---------|
+| Structural Analyst | executor | (no override) | opus | sonnet | haiku |
+| Risk Analyst | executor | (no override) | opus | sonnet | haiku |
+| Feasibility Analyst | executor | (no override) | opus | sonnet | haiku |
+
+### Execution Phase Sub-agents
+
+| Sub-agent | Role | default | all-opus | balanced | economy |
+|-----------|------|---------|----------|----------|---------|
+| Safety Advisor | advisor | (no override) | opus | opus | sonnet |
+
+### Verification Phase Sub-agents
+
+| Sub-agent | Role | default | all-opus | balanced | economy |
+|-----------|------|---------|----------|----------|---------|
+| Evaluator | evaluator | (no override) | opus | opus | sonnet |
+
+**Applying model config:** When launching any sub-agent, if `model_config.preset` is not `"default"`, pass the `model` parameter according to the table above for that sub-agent. Sub-agents must NOT directly access state.json to read model_config — the orchestrator passes the model parameter at launch time.
 
 ## Key Rules
 

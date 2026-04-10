@@ -25,6 +25,7 @@ When displaying status, print (in `user_lang`):
   Skill  : codebase-audit
   Target : <project name or path>
   Mode   : <quick | deep | thorough>
+  Model  : <model_config preset name>
   Phase  : <current phase>
   Scope  : <scope or "(full project)">
 ```
@@ -123,16 +124,48 @@ When the user invokes `/codebase-audit`, execute this workflow:
    On switch: update mode. On abort: halt.
    </HARD-GATE>
 
-10. **Slugify the target:** Use project name or directory name. Lowercase, transliterate non-ASCII to ASCII, remove non-word chars except hyphens, replace spaces with hyphens, truncate to 50 chars. Store as `<slug>`.
+10. **Model configuration selection (deep and thorough modes only):**
+   If mode is `quick`, skip this step (no sub-agents used).
 
-11. **Create output directory:** `docs/harness/<slug>/`
+   If `--model-config <preset>` was passed, use it directly. Otherwise, ask the user (in `user_lang`):
 
-12. **Print setup summary** (in `user_lang`):
+   If AskUserQuestion tool is available, use it:
+   ```
+   AskUserQuestion(
+     question: "Select model configuration for sub-agents:",
+     options: ["default", "all-opus", "balanced", "economy", "Other"]
+   )
+   ```
+   If AskUserQuestion is NOT available, present as a text question (in `user_lang`):
+   > "Select model configuration for sub-agents:
+   > (1) default — inherit parent model (no override)
+   > (2) all-opus — all sub-agents use Opus
+   > (3) balanced — Sonnet executor + Opus advisor/evaluator
+   > (4) economy — Haiku executor + Sonnet advisor/evaluator
+   > (5) Other — custom (format: executor:model,advisor:model,evaluator:model)
+   > Select: (1-5 or preset name)"
+
+   Accept: "1"-"5", preset names, or custom format (case-insensitive). Re-ask on unrecognized input.
+
+   **If "Other" selected:** Parse custom format `executor:<model>,advisor:<model>,evaluator:<model>`. Validate each model name — only `opus`, `sonnet`, `haiku` are allowed (case-insensitive). If any model name is invalid, inform the user which value is invalid and re-ask for input (max 3 retries, then apply `balanced` as default). If parsing succeeds but is partial, fill missing roles with the `balanced` defaults (executor=sonnet, advisor=opus, evaluator=opus). Show the parsed result to the user and ask for confirmation before proceeding.
+
+   **Model config is set once at session start and cannot be changed mid-session.** To change, restart the session.
+
+   Store result as `model_config` object: `{ "preset": "<name>", "executor": "<model|null>", "advisor": "<model|null>", "evaluator": "<model|null>" }`. For the `default` preset, store `{ "preset": "default" }`.
+
+   **Persist to `.harness/model_config.json`** (codebase-audit is stateless — no state.json). Create `.harness/` directory if needed.
+
+11. **Slugify the target:** Use project name or directory name. Lowercase, transliterate non-ASCII to ASCII, remove non-word chars except hyphens, replace spaces with hyphens, truncate to 50 chars. Store as `<slug>`.
+
+12. **Create output directory:** `docs/harness/<slug>/`
+
+13. **Print setup summary** (in `user_lang`):
     ```
     [harness] Codebase audit started.
       Skill  : codebase-audit
       Target : <project name or path>
       Mode   : <quick | deep | thorough>
+      Model  : <preset name>
       Scope  : <scope or "(full project)">
       Files  : <count> source files
       Incremental : <yes (N changed) | no>
@@ -206,7 +239,7 @@ Proceed to Step 4 with findings.
    - `{shared_context}`: contents of `.harness/context.md`
    - `{incremental_context}`: incremental info if applicable, else "(Full analysis — no prior audit)"
    - `{output_path}`: `.harness/analysis_<agent_name>.md`
-4. **Launch 2 sub-agents in parallel** using the Agent tool. Each receives its template and shared context.
+4. **Launch 2 sub-agents in parallel** using the Agent tool. Each receives its template and shared context. If `model_config.preset` is not `"default"`, pass `model` parameter per the Model Selection table (Structure & Dependency Analyst, Pattern & Quality Analyst → executor role).
 5. Wait for both to complete. Verify both analysis files exist.
 6. Proceed to Step 3-D Synthesis.
 
@@ -237,7 +270,7 @@ Proceed to Step 4 with findings.
    - `{shared_context}`: contents of `.harness/context.md`
    - `{incremental_context}`: incremental info if applicable, else "(Full analysis — no prior audit)"
    - `{output_path}`: `.harness/analysis_<agent_name>.md`
-4. **Launch 3 sub-agents in parallel** using the Agent tool. Each receives its template and shared context. No agent has knowledge of the others.
+4. **Launch 3 sub-agents in parallel** using the Agent tool. Each receives its template and shared context. No agent has knowledge of the others. If `model_config.preset` is not `"default"`, pass `model` parameter per the Model Selection table (Structure Analyst, Dependency Analyst, Pattern Analyst → executor role).
 5. Wait for all 3 to complete. Verify all 3 analysis files exist.
 
 ##### Step 3b-T: Cross-Verification (Parallel)
@@ -251,7 +284,7 @@ Proceed to Step 4 with findings.
    - `{analysis_1_author}` / `{analysis_1_content}`: first OTHER agent's analysis
    - `{analysis_2_author}` / `{analysis_2_content}`: second OTHER agent's analysis
    - `{output_path}`: `.harness/critique_<agent_name>.md`
-4. **Launch 3 sub-agents in parallel.** Each reviews the other two agents' analyses.
+4. **Launch 3 sub-agents in parallel.** Each reviews the other two agents' analyses. If `model_config.preset` is not `"default"`, pass `model` parameter per the Model Selection table (Cross-Critique → advisor role).
 5. Wait for all 3 to complete. Verify all 3 critique files exist.
 
 ##### Step 3c-T: Synthesis
@@ -354,7 +387,7 @@ Present as recommendations, not commands. User decides.
 
 ### Step 6: Completion
 
-1. Clean up `.harness/` directory (delete context.md, analysis files, critique files).
+1. Clean up `.harness/` directory (delete context.md, analysis files, critique files, model_config.json). Remove `.harness/` if empty.
 2. Print final status (in `user_lang`):
    ```
    [harness] Codebase audit complete.
@@ -365,6 +398,37 @@ Present as recommendations, not commands. User decides.
      Files  : <count> analyzed
      Next   : <primary suggestion from Smart Routing, if any>
    ```
+
+## Model Selection
+
+Sub-agents (deep and thorough modes only) can run on different models depending on the selected `model_config` preset. The presets map each role (executor, advisor, evaluator) to a model:
+
+| Preset | executor | advisor | evaluator |
+|--------|----------|---------|-----------|
+| default | (parent inherit) | (parent inherit) | (parent inherit) |
+| all-opus | opus | opus | opus |
+| balanced | sonnet | opus | opus |
+| economy | haiku | sonnet | sonnet |
+
+Each sub-agent is assigned a role. The following table defines the concrete model for every sub-agent under each preset:
+
+### Deep Mode Sub-agents
+
+| Sub-agent | Role | default | all-opus | balanced | economy |
+|-----------|------|---------|----------|----------|---------|
+| Structure & Dependency Analyst | executor | (no override) | opus | sonnet | haiku |
+| Pattern & Quality Analyst | executor | (no override) | opus | sonnet | haiku |
+
+### Thorough Mode Sub-agents
+
+| Sub-agent | Role | default | all-opus | balanced | economy |
+|-----------|------|---------|----------|----------|---------|
+| Structure Analyst | executor | (no override) | opus | sonnet | haiku |
+| Dependency Analyst | executor | (no override) | opus | sonnet | haiku |
+| Pattern Analyst | executor | (no override) | opus | sonnet | haiku |
+| Cross-Critique (per analyst) | advisor | (no override) | opus | opus | sonnet |
+
+**Applying model config:** When launching any sub-agent, if `model_config.preset` is not `"default"`, pass the `model` parameter according to the table above for that sub-agent. Sub-agents must NOT directly access `.harness/model_config.json` — the orchestrator passes the model parameter at launch time.
 
 ## Key Rules
 

@@ -26,6 +26,7 @@ When displaying status, read `.harness/state.json` and print (in `user_lang`):
 [harness:migrate]
   Target : <target> <from_version> → <to_version>
   Mode   : <single | multi>
+  Model  : <model_config preset name>
   Phase  : <phase label>
   Step   : <current_step> / <total_steps> (if in execution phase)
   Branch : <branch>
@@ -79,8 +80,9 @@ Detect the current version of `target` from project files:
 
 Before starting a new task, check if `.harness/state.json` already exists:
 
-1. If it exists, print status in the standard format, prefixed with `[harness:migrate] Previous session detected.`
-2. Ask the user (in their language) whether to resume, restart, or stop:
+1. If it exists, print status in the standard format (including Model line from `model_config`), prefixed with `[harness:migrate] Previous session detected.`
+2. Restore `model_config` from state.json. Apply it to all subsequent sub-agent launches.
+3. Ask the user (in their language) whether to resume, restart, or stop:
    - **Resume**: Jump to the step matching state.json phase:
      `setup` → Step 1 |
      `analyze_ready` → Step 2 |
@@ -147,8 +149,35 @@ When the user provides a migration target (via $ARGUMENTS or in conversation), e
 8. **Create directories:** `.harness/`, `.harness/migrate/`, `docs/harness/<slug>/`
 9. **Create git branch:** `git checkout -b harness/migrate-<slug>`
 10. **Mode selection:** Apply Scope-Aware Mode Selection rules above. If auto-selected, inform user and allow override. Accept: "1", "2", "single", "multi" (case-insensitive).
-11. **Write `.harness/state.json`** with fields: `skill` ("migrate"), `target`, `migration_type` ("upgrade"/"replacement"), `from_version`, `to_version`, `mode` ("single"/"multi"), `user_lang`, `repo_name`, `repo_path`, `phase` ("setup"), `current_step` (0), `total_steps` (0), `branch` ("harness/migrate-<slug>"), `lang`, `test_cmd`, `build_cmd`, `baseline_test_pass_count`, `baseline_test_fail_count`, `docs_path` ("docs/harness/<slug>/"), `created_at` (ISO8601).
-12. **Print setup summary** (in `user_lang`):
+11. **Model configuration selection:**
+   If `--model-config <preset>` was passed, use it directly. Otherwise, ask the user (in `user_lang`):
+
+   If AskUserQuestion tool is available, use it:
+   ```
+   AskUserQuestion(
+     question: "Select model configuration for sub-agents:",
+     options: ["default", "all-opus", "balanced", "economy", "Other"]
+   )
+   ```
+   If AskUserQuestion is NOT available, present as a text question (in `user_lang`):
+   > "Select model configuration for sub-agents:
+   > (1) default — inherit parent model (no override)
+   > (2) all-opus — all sub-agents use Opus
+   > (3) balanced — Sonnet executor + Opus advisor/evaluator
+   > (4) economy — Haiku executor + Sonnet advisor/evaluator
+   > (5) Other — custom (format: executor:model,advisor:model,evaluator:model)
+   > Select: (1-5 or preset name)"
+
+   Accept: "1"-"5", preset names, or custom format (case-insensitive). Re-ask on unrecognized input.
+
+   **If "Other" selected:** Parse custom format `executor:<model>,advisor:<model>,evaluator:<model>`. Validate each model name — only `opus`, `sonnet`, `haiku` are allowed (case-insensitive). If any model name is invalid, inform the user which value is invalid and re-ask for input (max 3 retries, then apply `balanced` as default). If parsing succeeds but is partial, fill missing roles with the `balanced` defaults (executor=sonnet, advisor=opus, evaluator=opus). Show the parsed result to the user and ask for confirmation before proceeding.
+
+   **Model config is set once at session start and cannot be changed mid-session.** To change, restart the session.
+
+   Store result as `model_config` object: `{ "preset": "<name>", "executor": "<model|null>", "advisor": "<model|null>", "evaluator": "<model|null>" }`. For the `default` preset, store `{ "preset": "default" }`.
+
+12. **Write `.harness/state.json`** with fields: `skill` ("migrate"), `target`, `migration_type` ("upgrade"/"replacement"), `from_version`, `to_version`, `mode` ("single"/"multi"), `model_config` (from step 11), `user_lang`, `repo_name`, `repo_path`, `phase` ("setup"), `current_step` (0), `total_steps` (0), `branch` ("harness/migrate-<slug>"), `lang`, `test_cmd`, `build_cmd`, `baseline_test_pass_count`, `baseline_test_fail_count`, `docs_path` ("docs/harness/<slug>/"), `created_at` (ISO8601).
+13. **Print setup summary** (in `user_lang`):
     ```
     [harness:migrate] Migration started!
       Target   : <target> <from_version> → <to_version>
@@ -156,6 +185,7 @@ When the user provides a migration target (via $ARGUMENTS or in conversation), e
       Repo     : <path>
       Branch   : harness/migrate-<slug>
       Mode     : <single | multi>
+      Model    : <preset name>
       Language : <lang>
       Test     : <test_cmd or "none">
       Build    : <build_cmd or "none">
@@ -227,14 +257,14 @@ Read `mode` from state.json and branch accordingly.
 1. Update state.json: phase → `"analyze_ready"`.
 2. Read the external research template: `{CLAUDE_PLUGIN_ROOT}/templates/migrate/external_research_analyst.md`
 3. Fill template variables: `{target}`, `{from_version}`, `{to_version}`, `{migration_type}`, `{lang}`, `{user_lang}`, `{output_path}`: `.harness/migrate/research_external.md`
-4. **Launch 1 subagent** (External Research Analyst) using the Agent tool. This subagent uses WebSearch/WebFetch to research the migration guide and extract breaking changes, deprecated APIs, and version requirements.
+4. **Launch 1 subagent** (External Research Analyst) using the Agent tool. If `model_config.preset` is not `"default"`, pass `model` parameter per the Model Selection table (External Research Analyst → executor role). This subagent uses WebSearch/WebFetch to research the migration guide and extract breaking changes, deprecated APIs, and version requirements.
 5. Wait for completion. Verify `.harness/migrate/research_external.md` exists.
 
 ##### Step 2b: Codebase Impact Analyst (Subagent — parallel with 2a)
 
 1. Read the codebase impact template: `{CLAUDE_PLUGIN_ROOT}/templates/migrate/codebase_impact_analyst.md`
 2. Fill template variables: `{target}`, `{from_version}`, `{to_version}`, `{migration_type}`, `{repo_path}`, `{lang}`, `{user_lang}`, `{output_path}`: `.harness/migrate/research_internal.md`
-3. **Launch 1 subagent** (Codebase Impact Analyst) in parallel with Step 2a. This subagent scans the codebase for all usages of the target library, identifies affected files, and assesses impact.
+3. **Launch 1 subagent** (Codebase Impact Analyst) in parallel with Step 2a. If `model_config.preset` is not `"default"`, pass `model` parameter per the Model Selection table (Codebase Impact Analyst → executor role). This subagent scans the codebase for all usages of the target library, identifies affected files, and assesses impact.
 4. Wait for completion. Verify `.harness/migrate/research_internal.md` exists.
 
 **Launch Steps 2a and 2b in parallel.** Wait for both to complete before proceeding.
@@ -318,7 +348,7 @@ If `mode == "multi"`:
 
 1. Read the migration advisor template: `{CLAUDE_PLUGIN_ROOT}/templates/migrate/migration_advisor.md`
 2. Fill template variables: `{step_number}` (N), `{step_title}`, `{step_changes}` (changes made in this step only), `{build_result}`, `{test_result}`, `{previous_steps_summary}` (one-line summary of each completed step — NOT full details), `{remaining_steps}` (titles only), `{user_lang}`, `{output_path}`: `.harness/migrate/advisor_step_<N>.md`
-3. **Launch 1 subagent** (Migration Advisor) to review this step. Lightweight review — only current step context + previous results summary.
+3. **Launch 1 subagent** (Migration Advisor) to review this step. If `model_config.preset` is not `"default"`, pass `model` parameter per the Model Selection table (Migration Advisor → advisor role). Lightweight review — only current step context + previous results summary.
 4. Read advisor output. If advisor flags issues:
    - **Critical:** Stop and fix before proceeding
    - **Warning:** Log and continue, address in next step or during evaluation
@@ -341,7 +371,7 @@ If `mode == "multi"`:
 2. Read the evaluator template: `{CLAUDE_PLUGIN_ROOT}/templates/migrate/evaluator.md`
 3. **Prepare the subagent prompt.** Fill in: `{target}`, `{from_version}`, `{to_version}`, `{migration_type}`, `{migration_plan_content}` (from migration_plan.md — breaking changes list only, no research reasoning), `{changed_files_list}` (file paths only from changes.md — strip all "reason" descriptions), `{test_available}`, `{build_cmd}`, `{test_cmd}`, `{baseline_test_pass_count}`, `{baseline_test_fail_count}`, `{user_lang}`, `{qa_report_path}`: `docs/harness/<slug>/qa_report.md`.
    **Do NOT include:** Research notes, analyst reasoning, advisor reviews, why files were changed, or references to "Generator"/"AI"/"agent" as code author.
-4. **Launch the Evaluator subagent** using the Agent tool. Instruct it to write the QA report to `docs/harness/<slug>/qa_report.md`.
+4. **Launch the Evaluator subagent** using the Agent tool. If `model_config.preset` is not `"default"`, pass `model` parameter per the Model Selection table (Evaluator → evaluator role). Instruct it to write the QA report to `docs/harness/<slug>/qa_report.md`.
 5. When the subagent returns, read `docs/harness/<slug>/qa_report.md` to get the verdict.
 
 ### Step 6: Verdict & Resolution
@@ -365,6 +395,40 @@ Ask the user (in `user_lang`) whether to commit the artifacts (migration_plan.md
 ### Status Check (anytime)
 
 If user asks for status, print status in the standard format defined above.
+
+## Model Selection
+
+Sub-agents can run on different models depending on the selected `model_config` preset. The presets map each role (executor, advisor, evaluator) to a model:
+
+| Preset | executor | advisor | evaluator |
+|--------|----------|---------|-----------|
+| default | (parent inherit) | (parent inherit) | (parent inherit) |
+| all-opus | opus | opus | opus |
+| balanced | sonnet | opus | opus |
+| economy | haiku | sonnet | sonnet |
+
+Each sub-agent is assigned a role. The following table defines the concrete model for every sub-agent under each preset:
+
+### Analysis Phase Sub-agents
+
+| Sub-agent | Role | default | all-opus | balanced | economy |
+|-----------|------|---------|----------|----------|---------|
+| External Research Analyst | executor | (no override) | opus | sonnet | haiku |
+| Codebase Impact Analyst | executor | (no override) | opus | sonnet | haiku |
+
+### Execution Phase Sub-agents
+
+| Sub-agent | Role | default | all-opus | balanced | economy |
+|-----------|------|---------|----------|----------|---------|
+| Migration Advisor | advisor | (no override) | opus | opus | sonnet |
+
+### Evaluator Phase Sub-agents
+
+| Sub-agent | Role | default | all-opus | balanced | economy |
+|-----------|------|---------|----------|----------|---------|
+| Evaluator | evaluator | (no override) | opus | opus | sonnet |
+
+**Applying model config:** When launching any sub-agent, if `model_config.preset` is not `"default"`, pass the `model` parameter according to the table above for that sub-agent. Sub-agents must NOT directly access state.json to read model_config — the orchestrator passes the model parameter at launch time.
 
 ## Key Rules
 

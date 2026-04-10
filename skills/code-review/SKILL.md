@@ -26,6 +26,7 @@ When displaying status, print (in `user_lang`):
 [code-review]
   Target : <PR#, branch, commit range, or file path>
   Mode   : <quick | deep | thorough>
+  Model  : <model_config preset name>
   Phase  : <phase label>
   Scope  : <N files, M lines>
 ```
@@ -91,6 +92,36 @@ When the user provides a review target (via $ARGUMENTS or in conversation), exec
 
 3. If mode was passed via argument (e.g., `--mode deep`), skip the prompt and use it directly.
 4. Accept: "1", "2", "3", "quick", "deep", "thorough" (case-insensitive). Re-ask on unrecognized input.
+5. **Model configuration selection (deep and thorough modes only):**
+   If mode is `quick`, skip this step (no sub-agents used).
+
+   If `--model-config <preset>` was passed, use it directly. Otherwise, ask the user (in `user_lang`):
+
+   If AskUserQuestion tool is available, use it:
+   ```
+   AskUserQuestion(
+     question: "Select model configuration for sub-agents:",
+     options: ["default", "all-opus", "balanced", "economy", "Other"]
+   )
+   ```
+   If AskUserQuestion is NOT available, present as a text question (in `user_lang`):
+   > "Select model configuration for sub-agents:
+   > (1) default — inherit parent model (no override)
+   > (2) all-opus — all sub-agents use Opus
+   > (3) balanced — Sonnet executor + Opus advisor/evaluator
+   > (4) economy — Haiku executor + Sonnet advisor/evaluator
+   > (5) Other — custom (format: executor:model,advisor:model,evaluator:model)
+   > Select: (1-5 or preset name)"
+
+   Accept: "1"-"5", preset names, or custom format (case-insensitive). Re-ask on unrecognized input.
+
+   **If "Other" selected:** Parse custom format `executor:<model>,advisor:<model>,evaluator:<model>`. Validate each model name — only `opus`, `sonnet`, `haiku` are allowed (case-insensitive). If any model name is invalid, inform the user which value is invalid and re-ask for input (max 3 retries, then apply `balanced` as default). If parsing succeeds but is partial, fill missing roles with the `balanced` defaults (executor=sonnet, advisor=opus, evaluator=opus). Show the parsed result to the user and ask for confirmation before proceeding.
+
+   **Model config is set once at session start and cannot be changed mid-session.** To change, restart the session.
+
+   Store result as `model_config` object: `{ "preset": "<name>", "executor": "<model|null>", "advisor": "<model|null>", "evaluator": "<model|null>" }`. For the `default` preset, store `{ "preset": "default" }`.
+
+   **Persist to `.harness/model_config.json`** (code-review is stateless — no state.json). Create `.harness/` directory if needed.
 
 ### Step 3: Confirmation Gate (deep and thorough only)
 
@@ -185,7 +216,7 @@ After completing the checklist, proceed to Step 5 (Report Generation).
 
 3. **Create directory:** `.harness/code-review/`
 
-4. **Launch 2 sub-agents in parallel** using the Agent tool. Each receives its reviewer template with the diff. Each writes to its output_path.
+4. **Launch 2 sub-agents in parallel** using the Agent tool. Each receives its reviewer template with the diff. Each writes to its output_path. If `model_config.preset` is not `"default"`, pass `model` parameter per the Model Selection table (Security & Correctness Reviewer, Architecture & Maintainability Reviewer → executor role).
 
    **Bias reduction applied to each sub-agent:**
    - **Context isolation**: each reviewer runs as a separate sub-agent with no shared state
@@ -216,7 +247,7 @@ Proceed to Step 5 (Report Generation). The main agent reads both review files an
 
 3. **Create directory:** `.harness/code-review/`
 
-4. **Launch 3 sub-agents in parallel** using the Agent tool. Each receives its reviewer template. Each writes to its output_path.
+4. **Launch 3 sub-agents in parallel** using the Agent tool. Each receives its reviewer template. Each writes to its output_path. If `model_config.preset` is not `"default"`, pass `model` parameter per the Model Selection table (all three reviewers → executor role).
 
    Same bias reduction as deep mode (context isolation, anchor-free, defect assumption, author neutralization).
 
@@ -236,7 +267,7 @@ Proceed to Step 5 (Report Generation). The main agent reads both review files an
    - `{user_lang}`: detected user language
    - `{output_path}`: `.harness/code-review/crossverify_<reviewer>.md`
 
-4. **Launch 3 sub-agents in parallel.** Each reads the other two reviewers' findings and verifies:
+4. **Launch 3 sub-agents in parallel.** If `model_config.preset` is not `"default"`, pass `model` parameter per the Model Selection table (Cross-Verification → advisor role). Each reads the other two reviewers' findings and verifies:
    - Are the reported findings real? (validate against actual diff)
    - Are there findings they missed that the others caught?
    - Are severity ratings appropriate?
@@ -377,9 +408,40 @@ These are suggestions only -- do not auto-invoke other skills.
      Report     : docs/harness/<slug>/review_report.md
    ```
 
-2. Clean up temporary files: delete `.harness/code-review/` directory (if it exists).
+2. Clean up temporary files: delete `.harness/code-review/` directory and `.harness/model_config.json` (if they exist). Remove `.harness/` if empty.
 
 3. Report file is preserved at `docs/harness/<slug>/review_report.md`.
+
+## Model Selection
+
+Sub-agents (deep and thorough modes only) can run on different models depending on the selected `model_config` preset. The presets map each role (executor, advisor, evaluator) to a model:
+
+| Preset | executor | advisor | evaluator |
+|--------|----------|---------|-----------|
+| default | (parent inherit) | (parent inherit) | (parent inherit) |
+| all-opus | opus | opus | opus |
+| balanced | sonnet | opus | opus |
+| economy | haiku | sonnet | sonnet |
+
+Each sub-agent is assigned a role. The following table defines the concrete model for every sub-agent under each preset:
+
+### Deep Mode Sub-agents
+
+| Sub-agent | Role | default | all-opus | balanced | economy |
+|-----------|------|---------|----------|----------|---------|
+| Security & Correctness Reviewer | executor | (no override) | opus | sonnet | haiku |
+| Architecture & Maintainability Reviewer | executor | (no override) | opus | sonnet | haiku |
+
+### Thorough Mode Sub-agents
+
+| Sub-agent | Role | default | all-opus | balanced | economy |
+|-----------|------|---------|----------|----------|---------|
+| Security & Correctness Reviewer | executor | (no override) | opus | sonnet | haiku |
+| Architecture & Design Reviewer | executor | (no override) | opus | sonnet | haiku |
+| DX & Maintainability Reviewer | executor | (no override) | opus | sonnet | haiku |
+| Cross-Verification (per reviewer) | advisor | (no override) | opus | opus | sonnet |
+
+**Applying model config:** When launching any sub-agent, if `model_config.preset` is not `"default"`, pass the `model` parameter according to the table above for that sub-agent. Sub-agents must NOT directly access `.harness/model_config.json` — the orchestrator passes the model parameter at launch time.
 
 ## Key Rules
 
