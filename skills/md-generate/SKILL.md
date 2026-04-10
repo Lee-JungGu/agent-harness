@@ -31,8 +31,20 @@ Never scan inside: `.git/`, `node_modules/`, `vendor/`, `dist/`, `build/`, `__py
 
 ### 1a. Safety & Environment Check
 
-1. Run `git status` in CWD. If not a git repo, warn the user in `user_lang`: "This project is not git-managed. Proceed without rollback safety? (yes / abort)". On abort, halt.
-2. Check for uncommitted changes. If found, warn: "Uncommitted changes detected. Commit or stash before proceeding? (continue / abort)".
+1. Run `git status` in CWD. If not a git repo, ask using AskUserQuestion (in `user_lang`):
+     header: "Git Warning"
+     question: "This project is not managed by git. Rollback will not be possible."
+     options:
+       - label: "Proceed" / description: "Continue without rollback safety"
+       - label: "Abort" / description: "Stop and initialize git first"
+   On "Abort": halt.
+2. Check for uncommitted changes. If found, ask using AskUserQuestion (in `user_lang`):
+     header: "Uncommitted"
+     question: "Uncommitted changes detected."
+     options:
+       - label: "Continue" / description: "Proceed with uncommitted changes"
+       - label: "Abort" / description: "Stop and commit or stash first"
+   On "Abort": halt.
 
 ### 1b. Smart Routing
 
@@ -46,7 +58,7 @@ Before proceeding with generation, assess whether this skill is the right tool:
 |-------|---------------|--------|
 | No CLAUDE.md or CLAUDE.md < 500 bytes | **Generate** | Proceed with md-generate (this skill) |
 | CLAUDE.md exists, 500+ bytes, but sparse (few sections, low heading count) | **Enhance** | Proceed with md-generate in enhancement mode. Detailed gap analysis runs in Phase 1g |
-| CLAUDE.md is comprehensive AND total .md tokens > 2x CLAUDE.md tokens | **Optimize instead** | Suggest: "CLAUDE.md appears comprehensive but .md files are bloated. `/md-optimize` may be more appropriate. Switch to optimize? (optimize / continue with generate)" |
+| CLAUDE.md is comprehensive AND total .md tokens > 2x CLAUDE.md tokens | **Optimize instead** | Ask using AskUserQuestion (in `user_lang`): header: "Routing", question: "CLAUDE.md appears comprehensive but .md files are bloated. Another skill may be more appropriate.", options: "Switch: /md-optimize" (optimize existing files) / "Continue" (proceed with generation). If user selects "Switch": halt this skill |
 | CLAUDE.md is thin AND .md files are bloated | **Generate then optimize** | Inform: "CLAUDE.md needs enhancement and .md files need optimization. Will run generation first. After completion, consider running `/md-optimize`." |
 | CLAUDE.md has `<!-- managed by md-optimize -->` marker but content is stale | **Re-generate** | Proceed with md-generate — optimizer marker does not block generation |
 
@@ -134,20 +146,27 @@ Present to the user (in `user_lang`):
 4. **Proposed CLAUDE.md sections**: List of sections to generate with brief description
 5. If existing CLAUDE.md: **Gap analysis** showing Missing / Outdated / Adequate counts
 6. **Content language selection** (only if `user_lang` is non-English):
-   Present the following prompt in `user_lang`:
-   > Select the language for CLAUDE.md content:
-   > 1. **English** (recommended) — most token-efficient
-   > 2. **[user's language name]** — prioritizes readability
-   > 3. **Hybrid** — technical terms in English, descriptions in [user's language name]
+   Ask using AskUserQuestion (in `user_lang`):
+     header: "Language"
+     question: "Select the language for CLAUDE.md content:"
+     options:
+       - label: "English (Recommended)" / description: "All content in English — most token-efficient"
+       - label: "{user_lang_name}" / description: "All content in user's language — prioritizes readability"
+       - label: "Hybrid" / description: "Technical terms in English, explanations in user's language"
    
    Store selection as `content_lang`.
 
-Ask for explicit confirmation. Allowed responses: "go", "proceed", "approve", "yes", "ok", "lgtm", and natural affirmatives in user's language.
+Ask for explicit confirmation using AskUserQuestion (in `user_lang`):
+  header: "Generate"
+  question: "Review analysis above. This will generate/update CLAUDE.md."
+  options:
+    - label: "Proceed" / description: "Start generation as analyzed"
+    - label: "Modify" / description: "Adjust sections or items before generating"
+    - label: "Stop" / description: "Halt the workflow"
 
-**Ambiguous responses** (hesitation, questions, conditionals, partial approval) — re-confirm:
-> "This will generate/update your CLAUDE.md. Explicit confirmation required. Proceed? (proceed / modify / abort)"
-
-On modify: let user adjust sections or add/remove items, then re-present. On abort: halt.
+If user selects "Modify" or provides modification details via "Other": let user adjust sections or add/remove items, then re-present this question.
+If user selects "Stop": halt.
+Only "Proceed" advances to Phase 3.
 </HARD-GATE>
 
 ## Phase 3: Generation
@@ -260,7 +279,14 @@ Verdict: PASS | NEEDS_REVISION
 ### 4d. Revision Handling
 
 - **PASS**: Proceed to Phase 5 (Report).
-- **NEEDS_REVISION**: Present issues to user (in `user_lang`). Apply fixes to CLAUDE.md for each confirmed issue. Do not re-run the full evaluator — only verify the specific fixes were applied correctly.
+- **NEEDS_REVISION**: Ask using AskUserQuestion (in `user_lang`):
+    header: "Fixes"
+    question: "Evaluator found {N} issues: [summary]."
+    options:
+      - label: "Fix all" / description: "Apply fixes for all detected issues"
+      - label: "Skip" / description: "Ignore issues and keep current state"
+    "Other" allows specifying which issues to fix.
+  Apply fixes to CLAUDE.md for each confirmed issue. Do not re-run the full evaluator — only verify the specific fixes were applied correctly.
 
 ## Phase 5: Report
 
@@ -277,6 +303,15 @@ Print final report (in `user_lang`):
   Token estimate   : N tokens
   Tip              : Run /md-optimize to further compress for token efficiency
 ```
+
+## User Interaction Rules
+
+All user-facing questions MUST use AskUserQuestion tool when available.
+- If AskUserQuestion is available → use it (provides numbered selection UI)
+- If AskUserQuestion is NOT available or fails → present the same options as text and accept number/keyword responses (case-insensitive)
+- Every option must include a `label` (short name) and `description` (specific explanation)
+- "Other" (free text input) is automatically appended by the framework
+- Translate all question text, labels, and descriptions to `user_lang`
 
 ## Safety Rules
 
