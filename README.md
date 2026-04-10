@@ -28,10 +28,11 @@ claude plugin install agent-harness@agent-harness-marketplace
 ## Quick Start
 
 ```
-/workflow fix login timeout bug                    # asks for mode
+/workflow fix login timeout bug                    # asks for mode + model config
 /workflow fix login timeout bug --mode single      # fast, token-saving
 /workflow fix login timeout bug --mode standard    # balanced analysis, ~1.5x tokens
 /workflow fix login timeout bug --mode multi       # deep multi-agent analysis, ~2-2.5x tokens
+/workflow fix bug --model-config balanced          # Sonnet executor + Opus advisor (cost-efficient)
 
 /codebase-audit                                    # auto-recommends mode based on project size
 /codebase-audit --mode thorough                    # comprehensive multi-agent analysis
@@ -52,6 +53,37 @@ claude plugin install agent-harness@agent-harness-marketplace
 /md-optimize                                       # optimize markdown files
 /md-generate                                       # analyze project & generate CLAUDE.md
 ```
+
+## Model Configuration (Advisor Strategy)
+
+Inspired by Anthropic's [Advisor Strategy](https://claude.com/blog/the-advisor-strategy), sub-agents can run on different models to optimize cost vs. quality. Select a preset at startup or via `--model-config`:
+
+| Preset | Executor | Advisor | Evaluator | Use case |
+|--------|----------|---------|-----------|----------|
+| **default** | (parent) | (parent) | (parent) | No change, inherit parent model |
+| **all-opus** | Opus | Opus | Opus | Maximum quality |
+| **balanced** | Sonnet | Opus | Opus | Recommended — cost-efficient with quality judgment |
+| **economy** | Haiku | Sonnet | Sonnet | Maximum savings, basic quality |
+
+**Role mapping across all skills:**
+- **Executor**: bulk work — analysis, code generation, proposals (cheaper model OK)
+- **Advisor**: high-level judgment — plan review, safety checks (quality model needed)
+- **Evaluator**: independent verification — always protected (never haiku)
+
+Works with: workflow, refactor, migrate, code-review, codebase-audit. Presets are selected via numbered UI (AskUserQuestion) with `Other` for custom role mapping.
+
+## Interactive UX
+
+All user-facing prompts use **AskUserQuestion** — a numbered selection UI where you pick by number instead of typing keywords. Every prompt includes descriptive options and an automatic `Other` option for free text input.
+
+Key interaction points:
+- **Mode selection**: numbered options with token cost hints and auto-recommendation
+- **Confirmation gates**: Proceed / Modify / Stop (replaces freeform text approval)
+- **QA retry**: Fix / Accept as-is
+- **Commit**: 3 options — "Commit code only" (recommended) / "Commit all with artifacts" / "No commit"
+- **Session recovery**: Resume / Restart / Stop
+
+Falls back to text-based input when AskUserQuestion is unavailable.
 
 ---
 
@@ -165,11 +197,12 @@ Higher modes use more tokens per run but have higher first-pass success rates, o
 | Option | Default | Description |
 |--------|---------|-------------|
 | mode | (ask user) | `single` for fast/token-saving, `standard` for balanced analysis, `multi` for deep multi-agent analysis |
+| model-config | (ask user) | `default` / `all-opus` / `balanced` / `economy` — see Model Configuration section |
 | scope | auto-detected | Restrict file modifications to a pattern |
 | max rounds | 3 | Maximum Generator/Evaluator retry cycles |
 | max files | 20 | Maximum number of files that can be modified |
 
-Example: `/workflow fix auth bug --mode single --scope "src/auth/**" --max-rounds 5`
+Example: `/workflow fix auth bug --mode single --model-config balanced --scope "src/auth/**"`
 
 ### Session Recovery
 

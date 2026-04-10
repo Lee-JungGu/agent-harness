@@ -26,6 +26,7 @@ When displaying status, print (in `user_lang`):
 [code-review]
   Target : <PR#, branch, commit range, or file path>
   Mode   : <quick | deep | thorough>
+  Model  : <model_config preset name>
   Phase  : <phase label>
   Scope  : <N files, M lines>
 ```
@@ -56,7 +57,13 @@ When the user provides a review target (via $ARGUMENTS or in conversation), exec
    - **Empty diff** -> Inform user (in `user_lang`): "No changes found for the given target. Nothing to review." Halt.
    - **PR not found** -> Inform user: "PR #N not found or not accessible. Verify the PR number and try again." Halt.
    - **Binary files** -> Note binary files in the diff. Skip them from review. Add a note to the report: "Binary files skipped: [list]".
-   - **Diff > 2000 lines** -> Warn user (in `user_lang`): "Large diff detected (N lines). Review quality may decrease for very large diffs. Consider reviewing in smaller chunks. Proceed? (proceed / abort)". On abort, halt.
+   - **Diff > 2000 lines** -> Ask the user using AskUserQuestion (in `user_lang`):
+       header: "Large Diff"
+       question: "Large diff detected ({N} lines). Review quality may degrade."
+       options:
+         - label: "Proceed" / description: "Review the full diff as-is"
+         - label: "Abort" / description: "Split into smaller chunks before reviewing"
+     On "Abort", halt.
 
 5. **Collect metadata** (used only for report header, NOT passed to reviewers in deep/thorough modes):
    - File list with line counts per file
@@ -77,35 +84,48 @@ When the user provides a review target (via $ARGUMENTS or in conversation), exec
    | 100-500 lines | deep | Medium change, benefits from specialist perspectives |
    | 500+ lines | thorough | Large change, needs comprehensive multi-angle review |
 
-2. **Present recommendation** (in `user_lang`):
-   ```
-   [code-review] Diff: N files, M lines changed
-     Recommended: <mode> -- <rationale>
+2. **Mode selection.** If `--mode quick`, `--mode deep`, or `--mode thorough` was passed, set mode and skip prompt. Otherwise, ask the user using AskUserQuestion (in `user_lang`):
+     header: "Review Mode"
+     question: "Select review depth: (Diff: {N} files, {M} lines)"
+     options:
+       - label: "quick" / description: "1 agent, 5-perspective checklist (~1x tokens)"
+       - label: "deep" / description: "2 specialists + synthesis (~1.5x tokens)"
+       - label: "thorough" / description: "3 specialists + cross-verification + synthesis (~2.5x tokens)"
+     Add "(Recommended)" to the label of the auto-recommended mode based on the scope-aware recommendation table above.
+3. **Model configuration selection (deep and thorough modes only):**
+   If mode is `quick`, skip this step (no sub-agents used).
 
-     1. quick   -- 1 agent, 5-perspective checklist (~1x)
-     2. deep    -- 2 specialists + synthesis (~1.5x)
-     3. thorough -- 3 specialists + cross-verification + synthesis (~2.5x)
+   If `--model-config <preset>` was passed, use it directly. Otherwise, use AskUserQuestion to ask the user (in `user_lang`):
+     header: "Model"
+     question: "Select model configuration for sub-agents:"
+     options:
+       - label: "default" / description: "Inherit parent model, no changes"
+       - label: "all-opus" / description: "All sub-agents use Opus (highest quality)"
+       - label: "balanced (Recommended)" / description: "Sonnet executor + Opus advisor/evaluator (cost-efficient)"
+       - label: "economy" / description: "Haiku executor + Sonnet advisor/evaluator (max savings)"
 
-     Select mode: (1/2/3 or quick/deep/thorough)
-   ```
+   **If "Other" selected:** Parse custom format `executor:<model>,advisor:<model>,evaluator:<model>`. Validate each model name — only `opus`, `sonnet`, `haiku` are allowed (case-insensitive). If any model name is invalid, inform the user which value is invalid and re-ask for input (max 3 retries, then apply `balanced` as default). If parsing succeeds but is partial, fill missing roles with the `balanced` defaults (executor=sonnet, advisor=opus, evaluator=opus). Show the parsed result to the user and ask for confirmation before proceeding.
 
-3. If mode was passed via argument (e.g., `--mode deep`), skip the prompt and use it directly.
-4. Accept: "1", "2", "3", "quick", "deep", "thorough" (case-insensitive). Re-ask on unrecognized input.
+   **Model config is set once at session start and cannot be changed mid-session.** To change, restart the session.
+
+   Store result as `model_config` object: `{ "preset": "<name>", "executor": "<model|null>", "advisor": "<model|null>", "evaluator": "<model|null>" }`. For the `default` preset, store `{ "preset": "default" }`.
+
+   **Persist to `.harness/model_config.json`** (code-review is stateless — no state.json). Create `.harness/` directory if needed.
 
 ### Step 3: Confirmation Gate (deep and thorough only)
 
 <HARD-GATE>
 For `deep` and `thorough` modes only. Skip this gate for `quick` mode.
 
-Inform the user (in `user_lang`):
-> "Deep/thorough review dispatches multiple sub-agents and consumes more tokens. Proceed with <mode> review? (proceed / switch to quick / abort)"
+Ask the user using AskUserQuestion (in `user_lang`):
+  header: "Confirm"
+  question: "{mode} review runs multiple sub-agents and uses more tokens."
+  options:
+    - label: "Proceed" / description: "Start {mode} review as selected"
+    - label: "Switch to quick" / description: "Use single-agent quick review instead"
+    - label: "Abort" / description: "Cancel the review"
 
-**Allowed responses:** "go", "proceed", "approve", "yes", "ok", "lgtm", and natural affirmatives in the user's language.
-
-**Ambiguous -- must re-confirm:**
-Hesitation, questions, conditional statements, topic changes.
-
-On switch: change mode to quick and proceed. On abort: halt.
+On "Switch to quick": change mode to quick and proceed. On "Abort": halt.
 </HARD-GATE>
 
 ### Step 4: Review Execution
@@ -185,7 +205,7 @@ After completing the checklist, proceed to Step 5 (Report Generation).
 
 3. **Create directory:** `.harness/code-review/`
 
-4. **Launch 2 sub-agents in parallel** using the Agent tool. Each receives its reviewer template with the diff. Each writes to its output_path.
+4. **Launch 2 sub-agents in parallel** using the Agent tool. Each receives its reviewer template with the diff. Each writes to its output_path. If `model_config.preset` is not `"default"`, pass `model` parameter per the Model Selection table (Security & Correctness Reviewer, Architecture & Maintainability Reviewer → executor role).
 
    **Bias reduction applied to each sub-agent:**
    - **Context isolation**: each reviewer runs as a separate sub-agent with no shared state
@@ -216,7 +236,7 @@ Proceed to Step 5 (Report Generation). The main agent reads both review files an
 
 3. **Create directory:** `.harness/code-review/`
 
-4. **Launch 3 sub-agents in parallel** using the Agent tool. Each receives its reviewer template. Each writes to its output_path.
+4. **Launch 3 sub-agents in parallel** using the Agent tool. Each receives its reviewer template. Each writes to its output_path. If `model_config.preset` is not `"default"`, pass `model` parameter per the Model Selection table (all three reviewers → executor role).
 
    Same bias reduction as deep mode (context isolation, anchor-free, defect assumption, author neutralization).
 
@@ -236,7 +256,7 @@ Proceed to Step 5 (Report Generation). The main agent reads both review files an
    - `{user_lang}`: detected user language
    - `{output_path}`: `.harness/code-review/crossverify_<reviewer>.md`
 
-4. **Launch 3 sub-agents in parallel.** Each reads the other two reviewers' findings and verifies:
+4. **Launch 3 sub-agents in parallel.** If `model_config.preset` is not `"default"`, pass `model` parameter per the Model Selection table (Cross-Verification → advisor role). Each reads the other two reviewers' findings and verifies:
    - Are the reported findings real? (validate against actual diff)
    - Are there findings they missed that the others caught?
    - Are severity ratings appropriate?
@@ -377,9 +397,49 @@ These are suggestions only -- do not auto-invoke other skills.
      Report     : docs/harness/<slug>/review_report.md
    ```
 
-2. Clean up temporary files: delete `.harness/code-review/` directory (if it exists).
+2. Clean up temporary files: delete `.harness/code-review/` directory and `.harness/model_config.json` (if they exist). Remove `.harness/` if empty.
 
 3. Report file is preserved at `docs/harness/<slug>/review_report.md`.
+
+## Model Selection
+
+Sub-agents (deep and thorough modes only) can run on different models depending on the selected `model_config` preset. The presets map each role (executor, advisor, evaluator) to a model:
+
+| Preset | executor | advisor | evaluator |
+|--------|----------|---------|-----------|
+| default | (parent inherit) | (parent inherit) | (parent inherit) |
+| all-opus | opus | opus | opus |
+| balanced | sonnet | opus | opus |
+| economy | haiku | sonnet | sonnet |
+
+Each sub-agent is assigned a role. The following table defines the concrete model for every sub-agent under each preset:
+
+### Deep Mode Sub-agents
+
+| Sub-agent | Role | default | all-opus | balanced | economy |
+|-----------|------|---------|----------|----------|---------|
+| Security & Correctness Reviewer | executor | (no override) | opus | sonnet | haiku |
+| Architecture & Maintainability Reviewer | executor | (no override) | opus | sonnet | haiku |
+
+### Thorough Mode Sub-agents
+
+| Sub-agent | Role | default | all-opus | balanced | economy |
+|-----------|------|---------|----------|----------|---------|
+| Security & Correctness Reviewer | executor | (no override) | opus | sonnet | haiku |
+| Architecture & Design Reviewer | executor | (no override) | opus | sonnet | haiku |
+| DX & Maintainability Reviewer | executor | (no override) | opus | sonnet | haiku |
+| Cross-Verification (per reviewer) | advisor | (no override) | opus | opus | sonnet |
+
+**Applying model config:** When launching any sub-agent, if `model_config.preset` is not `"default"`, pass the `model` parameter according to the table above for that sub-agent. Sub-agents must NOT directly access `.harness/model_config.json` — the orchestrator passes the model parameter at launch time.
+
+## User Interaction Rules
+
+All user-facing questions MUST use AskUserQuestion tool when available.
+- If AskUserQuestion is available → use it (provides numbered selection UI)
+- If AskUserQuestion is NOT available or fails → present the same options as text and accept number/keyword responses (case-insensitive)
+- Every option must include a `label` (short name) and `description` (specific explanation)
+- "Other" (free text input) is automatically appended by the framework
+- Translate all question text, labels, and descriptions to `user_lang`
 
 ## Key Rules
 

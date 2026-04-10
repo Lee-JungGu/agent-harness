@@ -25,6 +25,7 @@ When displaying status, print (in `user_lang`):
   Skill  : codebase-audit
   Target : <project name or path>
   Mode   : <quick | deep | thorough>
+  Model  : <model_config preset name>
   Phase  : <current phase>
   Scope  : <scope or "(full project)">
 ```
@@ -62,32 +63,34 @@ When the user invokes `/codebase-audit`, execute this workflow:
    > "[harness] No source files found in the project. Nothing to audit."
 
 6. **Error check — large project without scope:**
-   If file count > 500 and no `--scope` provided, suggest scope restriction (in `user_lang`):
-   > "[harness] Project has N files. Consider narrowing scope for faster, more focused analysis.
-   > Suggested scopes based on directory structure:
-   >   --scope "src/**"
-   >   --scope "lib/**"
-   >   --scope "packages/core/**"
-   > Proceed with full project scan? (proceed / set scope)"
+   If file count > 500 and no `--scope` provided, suggest scope restriction using AskUserQuestion (in `user_lang`):
+     header: "Scope"
+     question: "Project has {N} files. Narrowing scope produces faster, more focused analysis."
+     options:
+       - label: "Use suggested scope" / description: "Limit analysis to {suggested} (auto-detected from directory structure)"
+       - label: "Full scan" / description: "Analyze all {N} files in the project"
+     "Other" allows custom scope pattern (e.g. `src/**`, `lib/**`).
 
-   If user sets scope, apply it. If user proceeds, continue with full project.
+   Where `{suggested}` is determined by scanning top-level directories for common source paths (e.g. `src/**`, `lib/**`, `packages/core/**`).
 
-7. **Scope-aware mode recommendation.** If `--mode` was not provided:
+   If user selects "Use suggested scope", apply the suggested scope. If user selects "Full scan", continue with full project. If user provides a custom scope via "Other", apply it.
 
+7. **Scope-aware mode recommendation.** If `--mode` was not provided, use AskUserQuestion (in `user_lang`):
+     header: "Audit Mode"
+     question: "Select audit mode: ({N} files in scope)"
+     options:
+       - label: "quick" / description: "Overview: structure, tech stack, entry points (~1x tokens)"
+       - label: "deep" / description: "Detailed: + dependency graph, patterns, hotspots (~1.5x tokens)"
+       - label: "thorough" / description: "Comprehensive: + cross-verification, deep graph traversal (~2.5x tokens)"
+
+   Auto-recommend based on file count by appending "(Recommended)" to the matching label:
    | File count | Recommended mode |
    |-----------|-----------------|
    | < 30 | `quick` |
    | 30 - 200 | `deep` |
    | 200+ or monorepo detected | `thorough` |
 
-   Present recommendation to user (in `user_lang`):
-   > "[harness] Project has N files. Recommended mode: {mode}.
-   >   (1) quick    — overview: structure, tech stack, entry points (~1x tokens)
-   >   (2) deep     — detailed: + dependency graph, patterns, hotspots (~1.5x tokens)
-   >   (3) thorough — comprehensive: + cross-verification, deep graph traversal (~2.5x tokens)
-   > Select mode: (1/2/3 or quick/deep/thorough)"
-
-   Accept: "1", "2", "3", "quick", "deep", "thorough" (case-insensitive). Re-ask on unrecognized input.
+   Example: if 150 files in scope, the "deep" option label becomes `"deep (Recommended)"`.
 
    If `--mode` was provided, use it directly and skip the prompt.
 
@@ -110,29 +113,50 @@ When the user invokes `/codebase-audit`, execute this workflow:
 9. **Confirmation gate for deep/thorough modes:**
 
    <HARD-GATE>
-   If mode is `deep` or `thorough`, present confirmation (in `user_lang`):
-   > "[harness] {mode} mode uses ~{cost}x tokens compared to quick mode. Proceed? (proceed / switch to {lower_mode})"
+   If mode is `deep` or `thorough`, present confirmation using AskUserQuestion (in `user_lang`):
+     header: "Confirm"
+     question: "{mode} mode uses ~{cost}x tokens compared to quick."
+     options:
+       - label: "Proceed" / description: "Start {mode} analysis as configured"
+       - label: "Switch to {lower_mode}" / description: "Use {lower_mode} mode instead (fewer tokens)"
+       - label: "Abort" / description: "Cancel the audit"
 
    Where `{cost}` is "1.5" for deep, "2.5" for thorough, and `{lower_mode}` is "quick" for deep, "deep" for thorough.
 
-   Allowed responses: "go", "proceed", "approve", "yes", "ok", "lgtm", and natural affirmatives in user's language.
-
-   **Ambiguous responses** (hesitation, questions, conditionals) — re-confirm:
-   > "Analysis in {mode} mode consumes significant tokens. Explicit confirmation required. Proceed? (proceed / switch to {lower_mode} / abort)"
-
-   On switch: update mode. On abort: halt.
+   On "Proceed": continue. On "Switch to {lower_mode}": update mode, skip re-confirmation. On "Abort": halt.
    </HARD-GATE>
 
-10. **Slugify the target:** Use project name or directory name. Lowercase, transliterate non-ASCII to ASCII, remove non-word chars except hyphens, replace spaces with hyphens, truncate to 50 chars. Store as `<slug>`.
+10. **Model configuration selection (deep and thorough modes only):**
+   If mode is `quick`, skip this step (no sub-agents used).
 
-11. **Create output directory:** `docs/harness/<slug>/`
+   If `--model-config <preset>` was passed, use it directly. Otherwise, use AskUserQuestion to ask the user (in `user_lang`):
+     header: "Model"
+     question: "Select model configuration for sub-agents:"
+     options:
+       - label: "default" / description: "Inherit parent model, no changes"
+       - label: "all-opus" / description: "All sub-agents use Opus (highest quality)"
+       - label: "balanced (Recommended)" / description: "Sonnet executor + Opus advisor/evaluator (cost-efficient)"
+       - label: "economy" / description: "Haiku executor + Sonnet advisor/evaluator (max savings)"
 
-12. **Print setup summary** (in `user_lang`):
+   **If "Other" selected:** Parse custom format `executor:<model>,advisor:<model>,evaluator:<model>`. Validate each model name — only `opus`, `sonnet`, `haiku` are allowed (case-insensitive). If any model name is invalid, inform the user which value is invalid and re-ask for input (max 3 retries, then apply `balanced` as default). If parsing succeeds but is partial, fill missing roles with the `balanced` defaults (executor=sonnet, advisor=opus, evaluator=opus). Show the parsed result to the user and ask for confirmation before proceeding.
+
+   **Model config is set once at session start and cannot be changed mid-session.** To change, restart the session.
+
+   Store result as `model_config` object: `{ "preset": "<name>", "executor": "<model|null>", "advisor": "<model|null>", "evaluator": "<model|null>" }`. For the `default` preset, store `{ "preset": "default" }`.
+
+   **Persist to `.harness/model_config.json`** (codebase-audit is stateless — no state.json). Create `.harness/` directory if needed.
+
+11. **Slugify the target:** Use project name or directory name. Lowercase, transliterate non-ASCII to ASCII, remove non-word chars except hyphens, replace spaces with hyphens, truncate to 50 chars. Store as `<slug>`.
+
+12. **Create output directory:** `docs/harness/<slug>/`
+
+13. **Print setup summary** (in `user_lang`):
     ```
     [harness] Codebase audit started.
       Skill  : codebase-audit
       Target : <project name or path>
       Mode   : <quick | deep | thorough>
+      Model  : <preset name>
       Scope  : <scope or "(full project)">
       Files  : <count> source files
       Incremental : <yes (N changed) | no>
@@ -206,7 +230,7 @@ Proceed to Step 4 with findings.
    - `{shared_context}`: contents of `.harness/context.md`
    - `{incremental_context}`: incremental info if applicable, else "(Full analysis — no prior audit)"
    - `{output_path}`: `.harness/analysis_<agent_name>.md`
-4. **Launch 2 sub-agents in parallel** using the Agent tool. Each receives its template and shared context.
+4. **Launch 2 sub-agents in parallel** using the Agent tool. Each receives its template and shared context. If `model_config.preset` is not `"default"`, pass `model` parameter per the Model Selection table (Structure & Dependency Analyst, Pattern & Quality Analyst → executor role).
 5. Wait for both to complete. Verify both analysis files exist.
 6. Proceed to Step 3-D Synthesis.
 
@@ -237,7 +261,7 @@ Proceed to Step 4 with findings.
    - `{shared_context}`: contents of `.harness/context.md`
    - `{incremental_context}`: incremental info if applicable, else "(Full analysis — no prior audit)"
    - `{output_path}`: `.harness/analysis_<agent_name>.md`
-4. **Launch 3 sub-agents in parallel** using the Agent tool. Each receives its template and shared context. No agent has knowledge of the others.
+4. **Launch 3 sub-agents in parallel** using the Agent tool. Each receives its template and shared context. No agent has knowledge of the others. If `model_config.preset` is not `"default"`, pass `model` parameter per the Model Selection table (Structure Analyst, Dependency Analyst, Pattern Analyst → executor role).
 5. Wait for all 3 to complete. Verify all 3 analysis files exist.
 
 ##### Step 3b-T: Cross-Verification (Parallel)
@@ -251,7 +275,7 @@ Proceed to Step 4 with findings.
    - `{analysis_1_author}` / `{analysis_1_content}`: first OTHER agent's analysis
    - `{analysis_2_author}` / `{analysis_2_content}`: second OTHER agent's analysis
    - `{output_path}`: `.harness/critique_<agent_name>.md`
-4. **Launch 3 sub-agents in parallel.** Each reviews the other two agents' analyses.
+4. **Launch 3 sub-agents in parallel.** Each reviews the other two agents' analyses. If `model_config.preset` is not `"default"`, pass `model` parameter per the Model Selection table (Cross-Critique → advisor role).
 5. Wait for all 3 to complete. Verify all 3 critique files exist.
 
 ##### Step 3c-T: Synthesis
@@ -354,7 +378,7 @@ Present as recommendations, not commands. User decides.
 
 ### Step 6: Completion
 
-1. Clean up `.harness/` directory (delete context.md, analysis files, critique files).
+1. Clean up `.harness/` directory (delete context.md, analysis files, critique files, model_config.json). Remove `.harness/` if empty.
 2. Print final status (in `user_lang`):
    ```
    [harness] Codebase audit complete.
@@ -365,6 +389,46 @@ Present as recommendations, not commands. User decides.
      Files  : <count> analyzed
      Next   : <primary suggestion from Smart Routing, if any>
    ```
+
+## Model Selection
+
+Sub-agents (deep and thorough modes only) can run on different models depending on the selected `model_config` preset. The presets map each role (executor, advisor, evaluator) to a model:
+
+| Preset | executor | advisor | evaluator |
+|--------|----------|---------|-----------|
+| default | (parent inherit) | (parent inherit) | (parent inherit) |
+| all-opus | opus | opus | opus |
+| balanced | sonnet | opus | opus |
+| economy | haiku | sonnet | sonnet |
+
+Each sub-agent is assigned a role. The following table defines the concrete model for every sub-agent under each preset:
+
+### Deep Mode Sub-agents
+
+| Sub-agent | Role | default | all-opus | balanced | economy |
+|-----------|------|---------|----------|----------|---------|
+| Structure & Dependency Analyst | executor | (no override) | opus | sonnet | haiku |
+| Pattern & Quality Analyst | executor | (no override) | opus | sonnet | haiku |
+
+### Thorough Mode Sub-agents
+
+| Sub-agent | Role | default | all-opus | balanced | economy |
+|-----------|------|---------|----------|----------|---------|
+| Structure Analyst | executor | (no override) | opus | sonnet | haiku |
+| Dependency Analyst | executor | (no override) | opus | sonnet | haiku |
+| Pattern Analyst | executor | (no override) | opus | sonnet | haiku |
+| Cross-Critique (per analyst) | advisor | (no override) | opus | opus | sonnet |
+
+**Applying model config:** When launching any sub-agent, if `model_config.preset` is not `"default"`, pass the `model` parameter according to the table above for that sub-agent. Sub-agents must NOT directly access `.harness/model_config.json` — the orchestrator passes the model parameter at launch time.
+
+## User Interaction Rules
+
+All user-facing questions MUST use AskUserQuestion tool when available.
+- If AskUserQuestion is available → use it (provides numbered selection UI)
+- If AskUserQuestion is NOT available or fails → present the same options as text and accept number/keyword responses (case-insensitive)
+- Every option must include a `label` (short name) and `description` (specific explanation)
+- "Other" (free text input) is automatically appended by the framework
+- Translate all question text, labels, and descriptions to `user_lang`
 
 ## Key Rules
 

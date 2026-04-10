@@ -19,8 +19,20 @@ Never modify: `.git/`, `node_modules/`, `vendor/`, `dist/`, `build/`, `__pycache
 
 ### 1a. Safety & Environment Check
 
-1. Run `git status` in CWD. If not a git repo, warn the user in `user_lang`: "This project is not git-managed. Changes cannot be rolled back automatically. Create a manual backup before proceeding? (yes / abort)". On abort, halt.
-2. Check for uncommitted changes. If found, warn: "Uncommitted changes detected. Commit or stash before proceeding? (continue / abort)".
+1. Run `git status` in CWD. If not a git repo, ask the user using AskUserQuestion (in `user_lang`):
+     header: "Git Warning"
+     question: "This project is not managed by git. Automatic rollback not possible."
+     options:
+       - label: "Proceed" / description: "Continue without git safety net"
+       - label: "Abort" / description: "Stop and set up git first"
+   On "Abort": halt. On "Proceed": continue.
+2. Check for uncommitted changes. If found, ask the user using AskUserQuestion (in `user_lang`):
+     header: "Uncommitted"
+     question: "Uncommitted changes detected."
+     options:
+       - label: "Continue" / description: "Proceed with uncommitted changes"
+       - label: "Abort" / description: "Stop and commit/stash first"
+   On "Abort": halt. On "Continue": proceed.
 3. Search all `.md` files for the idempotency marker `<!-- managed by md-optimize -->`. If CLAUDE.md contains this marker, inform user: "This project was previously optimized. Re-running will refresh the optimization." Proceed normally (marker ensures idempotency).
 
 ### 1b. Smart Routing & Markdown Inventory
@@ -31,13 +43,21 @@ Never modify: `.git/`, `node_modules/`, `vendor/`, `dist/`, `build/`, `__pycache
 
 | State | Recommendation | Action |
 |-------|---------------|--------|
-| No .md files found | **Generate instead** | Suggest: "No markdown files found. `/md-generate` will analyze the project and create CLAUDE.md. Switch to generate? (generate / abort)" |
-| Only CLAUDE.md exists and < 500 bytes | **Generate instead** | Suggest: "CLAUDE.md is thin (N bytes). `/md-generate` can enhance it with project analysis. Switch to generate? (generate / continue with optimize)" |
+| No .md files found | **Generate instead** | Use AskUserQuestion with situation context |
+| Only CLAUDE.md exists and < 500 bytes | **Generate instead** | Use AskUserQuestion with situation context |
 | CLAUDE.md exists and is comprehensive, .md files have redundancy | **Optimize** | Proceed with md-optimize (this skill) |
-| CLAUDE.md is thin but other .md files are substantial | **Generate then optimize** | Suggest: "CLAUDE.md is thin but other .md files have content. Recommend `/md-generate` first to enhance CLAUDE.md, then re-run `/md-optimize`. Switch to generate? (generate / continue with optimize)" |
-| No CLAUDE.md but other .md files exist | **Generate then optimize** | Suggest: "No CLAUDE.md found. `/md-generate` will create one from project analysis. Optimization can follow. Switch to generate? (generate / continue with optimize)" |
+| CLAUDE.md is thin but other .md files are substantial | **Generate then optimize** | Use AskUserQuestion with situation context |
+| No CLAUDE.md but other .md files exist | **Generate then optimize** | Use AskUserQuestion with situation context |
 
-If the user chooses to switch, halt this skill. The user should then invoke `/md-generate` manually. Otherwise proceed.
+When the recommendation is not "Optimize" (i.e., generation may be needed), ask the user using AskUserQuestion (in `user_lang`):
+  header: "Routing"
+  question: "[situation description]. CLAUDE.md generation may be needed first."
+  options:
+    - label: "Switch: /md-generate" / description: "Run /md-generate first, then re-run /md-optimize"
+    - label: "Continue" / description: "Proceed with optimization as-is"
+
+If user selects "Switch: /md-generate": halt this skill. The user should then invoke `/md-generate` manually.
+If user selects "Continue": proceed with optimization.
 
 4. Estimate token count per file: `bytes / 4` for ASCII, `bytes / 3` for CJK-heavy content. Note: these are rough estimates; actual tokenization varies.
 
@@ -66,12 +86,17 @@ Present to the user (in `user_lang`):
 3. **Duplicate list**: Files identified as exact/near duplicates and proposed action (merge/remove)
 4. **Estimated savings**: `(current_total_tokens - projected_total_tokens) / current_total_tokens * 100`%
 
-Ask for explicit confirmation. Allowed responses: "go", "proceed", "approve", "yes", "ok", "lgtm", and natural affirmatives in user's language.
+Ask for explicit confirmation using AskUserQuestion (in `user_lang`):
+  header: "Optimize"
+  question: "Review optimization plan above. This will restructure markdown files."
+  options:
+    - label: "Proceed" / description: "Apply the optimization plan as shown"
+    - label: "Modify" / description: "Adjust zone assignments before proceeding"
+    - label: "Stop" / description: "Abort optimization"
 
-**Ambiguous responses** (hesitation, questions, conditionals, partial approval) — re-confirm:
-> "This operation will restructure your markdown files. Explicit confirmation required. Proceed? (proceed / modify / abort)"
-
-On modify: let user adjust zone assignments, then re-present. On abort: halt.
+If user selects "Modify" or provides modification details via "Other": update zone assignments and re-present this question.
+If user selects "Stop": halt.
+Only "Proceed" advances to Phase 3.
 </HARD-GATE>
 
 ## Phase 3: Execution (Sequential with Completion Check)
@@ -167,7 +192,14 @@ Verdict: PASS | NEEDS_REVISION
 ### 4d. Revision Handling
 
 - **PASS**: Proceed to Phase 5 (Report).
-- **NEEDS_REVISION**: Present issues to user (in `user_lang`). Apply fixes for each confirmed issue. Do not re-run the full evaluator — only verify the specific fixes were applied correctly.
+- **NEEDS_REVISION**: Ask the user using AskUserQuestion (in `user_lang`):
+    header: "Fixes"
+    question: "Evaluator found {N} issues."
+    options:
+      - label: "Fix all" / description: "Auto-fix all reported issues"
+      - label: "Skip" / description: "Proceed without fixing"
+    "Other" allows selective fix (user specifies which issues to fix).
+  Apply fixes for each confirmed issue. Do not re-run the full evaluator — only verify the specific fixes were applied correctly.
 
 ## Phase 5: Report
 
@@ -195,3 +227,12 @@ If any evaluation criterion has unresolved issues, append warnings.
 - **Scope boundary**: Only modify `.md` files. Never modify source code, configs, or non-markdown files.
 - **Sub-CLAUDE.md**: If subdirectories contain their own `CLAUDE.md`, treat as separate Inline Zones — do not merge into root CLAUDE.md. Add them to the Reference Index instead.
 - **Batch sizing**: Process files in batches of min(10, file_count/3). Adjust based on average file size — larger files get smaller batches.
+
+## User Interaction Rules
+
+All user-facing questions MUST use AskUserQuestion tool when available.
+- If AskUserQuestion is available → use it (provides numbered selection UI)
+- If AskUserQuestion is NOT available or fails → present the same options as text and accept number/keyword responses (case-insensitive)
+- Every option must include a `label` (short name) and `description` (specific explanation)
+- "Other" (free text input) is automatically appended by the framework
+- Translate all question text, labels, and descriptions to `user_lang`
