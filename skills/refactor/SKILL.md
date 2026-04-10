@@ -42,7 +42,15 @@ Before starting a new task, check if `.harness/state.json` already exists **and*
 
 1. If it exists and matches, print status in the standard format (including Model line from `model_config`), prefixed with `[harness] Previous refactor session detected.`
 2. Restore `model_config` from state.json. Apply it to all subsequent sub-agent launches.
-3. Ask the user (in their language) whether to resume, restart, or stop:
+3. Ask the user using AskUserQuestion (in `user_lang`):
+     header: "Session"
+     question: "[harness] Previous refactor session detected. [print status in standard format]. Resume, restart, or stop?"
+     options:
+       - label: "Resume" / description: "Continue from {phase} where the previous session left off"
+       - label: "Restart" / description: "Delete .harness/ and start from scratch"
+       - label: "Stop" / description: "Delete .harness/ and halt"
+
+   Actions per selection:
    - **Resume**: Jump to the step matching state.json phase:
      `plan_ready` → if refactor_plan.md exists go to Step 3, else Step 2 |
      `gen_ready` → Step 4 | `eval_ready` → Step 5 |
@@ -54,15 +62,22 @@ If `.harness/state.json` does not exist (or belongs to a different skill), proce
 
 ## Smart Routing
 
-Before beginning, evaluate the user's request. If it does not match a refactoring task, suggest a better skill:
+Before beginning, evaluate the user's request. If it does not match a refactoring task, suggest a better skill using AskUserQuestion (in `user_lang`):
 
-| Signal | Recommendation |
-|--------|---------------|
-| User describes a new feature or bug fix | Suggest `/workflow` — "This looks like new functionality, not a refactoring. Consider `/workflow <task>` instead." |
-| User mentions version upgrades, dependency changes, or migration | Suggest `/migrate` — "Version/dependency changes are better handled by `/migrate <target>`. Proceed anyway? (proceed / switch)" |
-| User wants to understand the codebase before refactoring | Suggest `/codebase-audit` — "Consider running `/codebase-audit` first for a systematic analysis. Proceed with refactor anyway? (proceed / switch)" |
+| Signal | Suggested Skill |
+|--------|----------------|
+| User describes a new feature or bug fix | `/workflow` |
+| User mentions version upgrades, dependency changes, or migration | `/migrate` |
+| User wants to understand the codebase before refactoring | `/codebase-audit` |
 
-If the user confirms they want to proceed with refactor despite the suggestion, continue.
+When a mismatch is detected, ask using AskUserQuestion:
+  header: "Routing"
+  question: "[detected mismatch]. A different skill may be more appropriate."
+  options:
+    - label: "Switch: /{suggested skill}" / description: "{why the suggested skill fits better}"
+    - label: "Continue" / description: "Proceed with refactor anyway"
+
+If the user selects "Continue", proceed with refactoring.
 
 ## Workflow
 
@@ -86,9 +101,14 @@ When the user provides a refactoring target (via $ARGUMENTS or in conversation),
 
    If none match, set language to "unknown", test/build commands to null.
 
-4. **Git safety check:** Run `git status`. If there are uncommitted changes, warn the user (in `user_lang`):
-   > "[harness] Uncommitted changes detected. Refactoring on a dirty working tree is risky. Commit or stash first? (commit / stash / proceed anyway)"
-   If user chooses commit: stage and commit. If stash: `git stash`. If proceed: continue with warning noted.
+4. **Git safety check:** Run `git status`. If there are uncommitted changes, ask using AskUserQuestion (in `user_lang`):
+     header: "Uncommitted"
+     question: "Uncommitted changes detected."
+     options:
+       - label: "Commit first" / description: "Stage and commit current changes before refactoring"
+       - label: "Stash first" / description: "Run git stash to save changes temporarily"
+       - label: "Proceed anyway" / description: "Continue with dirty working tree (risky)"
+   If user selects "Commit first": stage and commit. If "Stash first": `git stash`. If "Proceed anyway": continue with warning noted.
 
 5. **Create directories:** `.harness/`, `.harness/refactor/`, `docs/harness/<slug>/`
 6. **Create git branch:** `git checkout -b harness/refactor-<slug>`
@@ -97,25 +117,35 @@ When the user provides a refactoring target (via $ARGUMENTS or in conversation),
    - If `test_cmd` is available, run it and save output to `.harness/refactor/baseline_tests.txt`.
    - Record: total tests, passed, failed, skipped.
    - **If baseline tests are failing:**
-     Print (in `user_lang`):
-     > "[harness] Baseline tests are failing: <N> failures. Fix failing tests before refactoring? (fix / proceed with known failures)"
-     If user chooses fix: halt and suggest `/workflow fix failing tests`. If proceed: store baseline failures in state.json as `baseline_failures` so the evaluator can distinguish pre-existing failures from regressions.
+     Ask using AskUserQuestion (in `user_lang`):
+       header: "Test Fail"
+       question: "Baseline tests fail: {N} failures."
+       options:
+         - label: "Fix first" / description: "Halt refactoring and fix failing tests before proceeding"
+         - label: "Proceed anyway" / description: "Continue with known failures (evaluator will ignore them)"
+     If user selects "Fix first": halt and suggest `/workflow fix failing tests`. If "Proceed anyway": store baseline failures in state.json as `baseline_failures` so the evaluator can distinguish pre-existing failures from regressions.
    - **If no test command detected:**
-     Print (in `user_lang`):
-     > "[harness] No test suite detected. Behavior preservation cannot be verified by tests. Proceed with code review only? (proceed / abort)"
-     If abort: halt. If proceed: set `test_available` to false and continue (verification will rely on code review only).
+     Ask using AskUserQuestion (in `user_lang`):
+       header: "No Tests"
+       question: "No test suite detected. Behavior preservation will be verified by code review only."
+       options:
+         - label: "Proceed" / description: "Continue without test verification, rely on code review"
+         - label: "Abort" / description: "Halt refactoring until tests are available"
+     If user selects "Abort": halt. If "Proceed": set `test_available` to false and continue (verification will rely on code review only).
 
 8. **Mode selection:** If `--mode single`, `--mode multi`, or `--mode comprehensive` was passed, set mode and skip prompt. Otherwise:
    - **Scope-aware recommendation:** Count files affected by the refactoring target.
      - < 3 files → recommend `single`
      - 3-10 files → recommend `multi`
      - 10+ files or architecture-level → recommend `comprehensive`
-   - Ask the user (in `user_lang`) to choose, showing the recommendation:
-     > "[harness] Scope analysis suggests `<recommended>` mode."
-     > (1) single — 1 agent, fast (~1x tokens)
-     > (2) multi — 2 analysts + safety advisor (~1.7x tokens)
-     > (3) comprehensive — 3 analysts + cross-verification + safety advisor (~2.5x tokens)
-   - Accept: "1", "2", "3", "single", "multi", "comprehensive" (case-insensitive). Re-ask on unrecognized input.
+   - Ask the user using AskUserQuestion (in `user_lang`):
+       header: "Mode"
+       question: "Select refactoring mode: (scope: {N} files)"
+       options:
+         - label: "single (Recommended)" / description: "1 agent, fast (~1x tokens)" ← add "(Recommended)" to the auto-recommended mode's label instead
+         - label: "multi" / description: "2 analysts + safety advisor (~1.7x tokens)"
+         - label: "comprehensive" / description: "3 analysts + cross-verification + safety advisor (~2.5x tokens)"
+     Add "(Recommended)" to whichever mode the scope-aware recommendation selects; omit it from the others.
 
 9. **Model configuration selection:**
    If `--model-config <preset>` was passed, use it directly. Otherwise, ask the user (in `user_lang`):
@@ -274,21 +304,19 @@ Same as Step 2a-M.
 ### Step 3: HARD GATE — Plan Confirmation
 
 <HARD-GATE>
-Show refactor_plan.md to the user and ask for explicit confirmation (in `user_lang`). Do NOT proceed to Execution until confirmed.
+Show refactor_plan.md to the user and ask for explicit confirmation using AskUserQuestion (in `user_lang`):
+  header: "Plan"
+  question: "Review the plan. {mode} mode uses ~{N}x tokens."
+  options:
+    - label: "Proceed" / description: "Start execution as planned"
+    - label: "Modify" / description: "Edit the plan, then re-confirm"
+    - label: "Switch to single" / description: "Reduce scope to single-agent mode (~1x tokens)"
+    - label: "Stop" / description: "Halt the workflow"
 
-**Token cost warning** (multi/comprehensive only):
-> "[harness] Execution phase uses ~{N}x tokens compared to single mode. Proceed? (proceed / switch to single)"
-
-**Allowed responses (proceed only on these — any language):**
-"go", "proceed", "approve", "yes", "ok", "lgtm", and natural affirmatives in the user's language.
-
-**Ambiguous — must re-confirm:**
-Hesitation, questions, conditional statements, topic changes.
-
-On ambiguity, respond in `user_lang` with a message equivalent to:
-> "Refactoring modifies code structure. Explicit confirmation is required. Proceed with the plan as written? (proceed / modify / stop)"
-
-If user requests modifications, update refactor_plan.md and re-confirm. If user stops, halt the workflow.
+If user selects "Modify" or provides modification details via "Other": update refactor_plan.md and re-present this question.
+If user selects "Switch to single": update mode in state.json to "single" and re-present this question.
+If user selects "Stop": halt the workflow.
+Only "Proceed" advances to the Execution phase.
 </HARD-GATE>
 
 ### Step 4: Phase 2 — Execution
@@ -309,14 +337,16 @@ Read `mode` from state.json and branch accordingly.
    b. Execute the refactoring change.
    c. Run `test_cmd` (if available). Compare results with baseline.
    d. **If new test failure:**
-      Print (in `user_lang`):
-      > "[harness] STOP — Test regression detected at Step N."
-      > "Failing test: <test name>"
-      > "This test was passing in baseline. The refactoring broke behavior."
-      > "Action: (revert step / manual fix / abort refactoring)"
-      If revert: undo the step, mark it as failed in changes.md, continue to next step.
-      If manual fix: wait for user to fix, then re-run tests.
-      If abort: go to Step 7 (cleanup).
+      Ask using AskUserQuestion (in `user_lang`):
+        header: "Regression"
+        question: "Test regression detected (Step {N}). Failed: {test}."
+        options:
+          - label: "Revert step" / description: "Undo this step, mark as failed, continue to next step"
+          - label: "Manual fix" / description: "Pause for manual fix, then re-run tests"
+          - label: "Abort refactoring" / description: "Stop all refactoring and go to cleanup"
+      If "Revert step": undo the step, mark it as failed in changes.md, continue to next step.
+      If "Manual fix": wait for user to fix, then re-run tests.
+      If "Abort refactoring": go to Step 7 (cleanup).
    e. If tests pass (or no tests): mark step as done, continue.
 3. After all steps complete, write `docs/harness/<slug>/changes.md` with sections:
    - Round {round_num} Changes
@@ -378,17 +408,30 @@ Read qa_report.md and determine verdict (look for "Verdict: PASS" or "Verdict: F
 
 **If PASS:** Update state.json: phase → `"completed"`. Inform user: refactoring complete, behavior preserved. Proceed to Step 7.
 
-**If FAIL and rounds remaining (round < max_rounds):** Do NOT auto-retry. Ask user:
-> "[harness] QA result: FAIL. [failure summary]. Proceed to next round? (proceed / stop)"
-If confirmed: increment round, go to Step 4. If stopped: phase → "completed", go to Step 7.
+**If FAIL and rounds remaining (round < max_rounds):** Do NOT auto-retry. Ask the user using AskUserQuestion (in `user_lang`):
+  header: "QA"
+  question: "QA result: FAIL. [failure summary]."
+  options:
+    - label: "Fix" / description: "Run next round to fix FAIL items only"
+    - label: "Accept as-is" / description: "Finish without fixing, keep current state"
+If user selects "Fix": increment round, go to Step 4. If "Accept as-is": phase → "completed", go to Step 7.
 
 **If FAIL and max rounds reached:** phase → `"completed"`. Inform user of remaining issues. Proceed to Step 7.
 
 ### Step 7: Cleanup & Commit
 
-Ask the user (in `user_lang`) whether to commit the artifacts (refactor_plan.md, changes.md, qa_report.md).
-- If commit: stage and commit `docs/harness/<slug>/` files and all modified source files
-- Clean up `.harness/` directory (delete state.json, refactor/, context.md, and the directory itself)
+Ask the user using AskUserQuestion (in `user_lang`):
+  header: "Commit"
+  question: "Implementation complete. Choose how to finish:"
+  options:
+    - label: "Commit code only (Recommended)" / description: "Clean up artifacts (.harness/, docs/harness/) then commit code changes only"
+    - label: "Commit all" / description: "Commit everything including artifacts (refactor_plan.md, changes.md, qa_report.md)"
+    - label: "No commit" / description: "Clean up .harness/ only, do not commit (changes remain in working tree)"
+
+Actions per selection:
+- "Commit code only": delete `.harness/` dir, delete `docs/harness/<slug>/` dir, stage and commit remaining code changes
+- "Commit all": delete `.harness/` dir, stage and commit `docs/harness/<slug>/` files + code changes
+- "No commit": delete `.harness/` dir only
 
 ### Status Check (anytime)
 
@@ -428,6 +471,15 @@ Each sub-agent is assigned a role. The following table defines the concrete mode
 | Evaluator | evaluator | (no override) | opus | opus | sonnet |
 
 **Applying model config:** When launching any sub-agent, if `model_config.preset` is not `"default"`, pass the `model` parameter according to the table above for that sub-agent. Sub-agents must NOT directly access state.json to read model_config — the orchestrator passes the model parameter at launch time.
+
+## User Interaction Rules
+
+All user-facing questions MUST use AskUserQuestion tool when available.
+- If AskUserQuestion is available → use it (provides numbered selection UI)
+- If AskUserQuestion is NOT available or fails → present the same options as text and accept number/keyword responses (case-insensitive)
+- Every option must include a `label` (short name) and `description` (specific explanation)
+- "Other" (free text input) is automatically appended by the framework
+- Translate all question text, labels, and descriptions to `user_lang`
 
 ## Key Rules
 
