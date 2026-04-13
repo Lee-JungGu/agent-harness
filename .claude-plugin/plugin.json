@@ -1,7 +1,7 @@
 {
   "name": "agent-harness",
   "description": "3-Phase development workflow, safe refactoring, staged migration, hypothesis-driven debugging, team knowledge base, automated test generation, requirements specification, and markdown optimization for Claude Code — no dependencies required",
-  "version": "6.1.0",
+  "version": "7.0.0",
   "author": {
     "name": "Jugger"
   },

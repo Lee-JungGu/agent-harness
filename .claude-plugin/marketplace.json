@@ -5,8 +5,8 @@
     "email": ""
   },
   "metadata": {
-    "description": "3-Phase development workflow, safe refactoring, staged migration, and markdown optimization for Claude Code — no dependencies required",
-    "version": "6.1.0"
+    "description": "3-Phase development workflow, safe refactoring, staged migration, hypothesis-driven debugging, team knowledge base, automated test generation, requirements specification, and markdown optimization for Claude Code — no dependencies required",
+    "version": "7.0.0"
   },
   "plugins": [
     {
@@ -15,12 +15,12 @@
         "source": "github",
         "repo": "Jugger0716/agent-harness"
       },
-      "description": "3-Phase development workflow, safe refactoring, staged migration, code review, and markdown optimization for Claude Code",
-      "version": "6.1.0",
+      "description": "3-Phase development workflow, safe refactoring, staged migration, hypothesis-driven debugging, team knowledge base, automated test generation, code review, and markdown optimization for Claude Code",
+      "version": "7.0.0",
       "author": {
         "name": "Jugger"
       },
-      "keywords": ["workflow", "refactor", "migrate", "codebase-audit", "code-review", "md-optimize", "md-generate", "planner", "generator", "evaluator", "multi-agent", "token-efficiency"]
+      "keywords": ["workflow", "refactor", "migrate", "codebase-audit", "code-review", "md-optimize", "md-generate", "debug", "memory", "test-gen", "spec", "planner", "generator", "evaluator", "multi-agent", "token-efficiency", "hypothesis", "knowledge-base", "test-generation", "requirements"]
     }
   ]
 }
