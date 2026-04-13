@@ -13,6 +13,10 @@ Inspired by Anthropic's [Harness Design for Long-Running Application Development
 | **Workflow** | `/workflow <task>` | 3-Phase (Planner -> Generator -> Evaluator) workflow. Single or multi-agent mode. Works with or without git. |
 | **Refactor** | `/refactor <target>` | Safe, behavior-preserving code structure improvement. Single, multi, or comprehensive mode. |
 | **Migrate** | `/migrate <target> [--from v4 --to v5]` | Staged migration of frameworks, libraries, and dependencies. Single or multi-agent mode with WebSearch research. |
+| **Debug** | `/debug <error>` | Hypothesis-driven debugging with mandatory executable verification. Quick or deep (2-agent cross-verification) mode. |
+| **Spec** | `/spec <requirement>` | Multi-round Q&A requirements specification. Output directly compatible with `/workflow` input. Quick or deep mode. |
+| **Test Gen** | `/test-gen <target>` | Automated test generation with mutation-based quality verification. Supports coverage-gap and regression modes. |
+| **Memory** | `/memory <cmd>` | Team knowledge base (save/show/clean/search). Git-committed, team-shared decisions, patterns, and conventions. |
 | **Codebase Audit** | `/codebase-audit` | Systematic codebase analysis with 3-tier mode (quick/deep/thorough) for team onboarding. |
 | **Code Review** | `/code-review <target>` | Systematic, bias-free code review. Quick (1 agent), deep (2 specialists), or thorough (3 specialists + cross-verification). |
 | **MD Optimize** | `/md-optimize` | Optimize CLAUDE.md and project `.md` files for token efficiency. |
@@ -35,6 +39,21 @@ claude plugin install agent-harness@agent-harness-marketplace
 /workflow fix bug --model-config balanced          # Sonnet executor + Opus advisor (cost-efficient)
 
 /workflow draft product requirements spec           # works without git too (non-dev tasks)
+
+/debug "NullPointerException in UserController"    # hypothesis-driven debugging
+/debug --mode deep --attach error.log              # 2-agent cross-verification
+
+/spec "Add payment retry on failure"               # multi-round Q&A -> structured spec
+/spec --mode deep                                  # 2 analysts (requirements + user scenario)
+
+/test-gen src/auth/                                # generate tests for directory
+/test-gen --coverage-gap                           # auto-find low-coverage areas
+/test-gen --regression docs/harness/slug/debug_report.md  # regression tests from debug
+
+/memory save                                       # save team-valuable decisions from session
+/memory show                                       # list all team knowledge records
+/memory clean                                      # remove stale/completed records
+/memory search authentication                      # search across knowledge base
 
 /codebase-audit                                    # auto-recommends mode based on project size
 /codebase-audit --mode thorough                    # comprehensive multi-agent analysis
@@ -72,7 +91,7 @@ Inspired by Anthropic's [Advisor Strategy](https://claude.com/blog/the-advisor-s
 - **Advisor**: high-level judgment — plan review, safety checks (quality model needed)
 - **Evaluator**: independent verification — always protected (never haiku)
 
-Works with: workflow, refactor, migrate, code-review, codebase-audit. Presets are selected via numbered UI (AskUserQuestion) with `Other` for custom role mapping.
+Works with: workflow, refactor, migrate, debug, spec, test-gen, code-review, codebase-audit. Presets are selected via numbered UI (AskUserQuestion) with `Other` for custom role mapping.
 
 ## Interactive UX
 
@@ -488,6 +507,237 @@ docs/harness/<slug>/
 ### Session Recovery
 
 If a session is interrupted, the harness detects the existing `.harness/state.json` on next invocation and offers to resume — including mid-execution recovery (resumes from the last completed step).
+
+---
+
+## debug
+
+Hypothesis-driven debugger with mandatory executable verification actions. Classifies error types, attempts reproduction, generates falsifiable hypotheses, and verifies them through code search, git history, and test execution.
+
+```
+/debug  -> [Setup] Error info collection + error type classification + mode selection
+                    -> [Phase 0.5] Error Type Classification
+                       build/compile: fast path -> simplified HARD-GATE -> Fix
+                       runtime/logic: -> Phase 0.7
+                    -> [Phase 0.7] Reproduction Attempt
+                       success: record conditions, proceed
+                       failure: switch to log/environment analysis
+                    -> [Phase 1] Root Cause Analysis (Hypothesis Loop)
+                       quick: orchestrator generates 3 hypotheses
+                              -> falsification (executable actions only)
+                              -> loop until High confidence or max 3 rounds
+                       deep:  Error Analyst + Code Archaeologist (parallel)
+                              -> Cross Verification (synthesize)
+                    -> HARD-GATE: Fix it / Record only / Stop
+                    -> [Phase 2] Fix (optional, simple fixes only)
+                    -> [Phase 3] Prevention (optional, pattern scan + smart routing)
+```
+
+### Core: Falsification Rules
+
+Every hypothesis must be tested with **executable verification actions** -- pure reasoning-only falsification is prohibited:
+
+1. **Physical separation**: Write hypotheses to `.harness/debug/hypotheses.md` before verification
+2. **Falsification question**: "If this hypothesis is WRONG, what evidence should exist in the code?"
+3. **Executable actions required** (at least 1 per hypothesis):
+   - Code search (Grep/Glob) -- check for specific patterns
+   - `git blame`/`git log` -- check change history
+   - Test execution -- verify expected behavior
+   - File read -- check configs, env vars
+4. **Confidence adjusted only from evidence**, not reasoning
+5. **Refuted hypotheses marked `[REFUTED]`** with evidence in hypotheses.md
+
+### Error Type Fast Path
+
+| Type | Signals | Action |
+|------|---------|--------|
+| **build/compile** | Compiler error, syntax error, missing import | Skip hypothesis loop -- compiler output is direct evidence |
+| **runtime** | Exception at runtime, crash, null pointer | Reproduction attempt -> hypothesis loop |
+| **logic** | Wrong output, test failure, off-by-one | Reproduction attempt -> hypothesis loop |
+
+### Modes
+
+| Mode | Agents | Process | Token cost |
+|------|--------|---------|------------|
+| **quick** | Orchestrator only | Direct hypothesis loop | ~1x |
+| **deep** | Error Analyst + Code Archaeologist + Cross Verifier | Independent parallel analysis -> cross-verification | ~1.7x |
+
+### Smart Routing (after completion)
+
+| Signal | Suggested next step |
+|--------|-------------------|
+| Complex fix needed | `/workflow "Fix based on docs/harness/<slug>/root_cause.md"` |
+| Regression test needed | `/test-gen --regression docs/harness/<slug>/debug_report.md` |
+| Pattern to record | `/memory save` |
+
+### Output
+
+```
+docs/harness/<slug>/
+  root_cause.md      # Root cause + evidence + confidence
+  fix_changes.md     # Fix details (if applied)
+  debug_report.md    # Comprehensive report (root cause + fix + prevention)
+```
+
+---
+
+## spec
+
+Transforms vague or incomplete requirements into structured, actionable specifications through **multi-round Q&A discovery**. Output is directly compatible with `/workflow` input via section mapping.
+
+```
+/spec  -> [Setup] mode selection (quick / deep)
+                  -> [Phase 1] Requirements Discovery (Multi-round Q&A)
+                     Round 1: parse vague requirements -> generate up to 5 questions
+                     Round 2-3: follow-up questions from new ambiguities (conditional)
+                     Max 3 rounds. "Don't know" -> [unconfirmed]
+                  -> [Phase 2] Spec Generation
+                     quick: orchestrator writes spec directly
+                     deep:  Requirements Analyst + User Scenario Analyst (parallel)
+                            -> Synthesis
+                  -> HARD-GATE: Approve / Modify (re-generate) / Stop
+                  -> [Phase 3] Handoff: suggest /workflow with spec path
+```
+
+### Core: Multi-round Q&A
+
+The key differentiator from `/workflow`'s Planner phase:
+
+| Feature | /workflow Planner | /spec |
+|---------|------------------|-------|
+| Input | Clear requirements | Vague/incomplete requirements |
+| Q&A | None | **Up to 3 rounds** with follow-up questions |
+| Approach section | Included (implementation-focused) | Not included (implementation is /workflow's job) |
+| Acceptance criteria | Brief checklist | **Given/When/Then format** |
+| Out of Scope | Brief in Scope section | **Dedicated section** |
+| Refinement | One-shot | **Modify -> regenerate loop** |
+
+### Spec Output Format
+
+Seven canonical sections, all translated to `user_lang`:
+
+```
+Goal -> Background & Decisions -> Scope -> Out of Scope ->
+Edge Cases -> Acceptance Criteria (Given/When/Then) -> Risks
+```
+
+Maps directly to `/workflow` input: Goal->Goal, Background->Background, Scope->Scope, Acceptance Criteria->Completion Criteria, Risks->Risks, Edge Cases->Testing Strategy.
+
+### Modes
+
+| Mode | Agents | Token cost |
+|------|--------|------------|
+| **quick** | Orchestrator only | ~0.5x |
+| **deep** | Requirements Analyst + User Scenario Analyst + Synthesis | ~1.3x |
+
+---
+
+## test-gen
+
+Automated test generator that writes real test code, executes it, and validates meaningfulness through **simplified mutation testing**. Supports framework auto-detection, dependency-aware mocking, and regression test generation from debug reports.
+
+```
+/test-gen  -> [Setup] Framework detection + model config
+                      -> [Phase 1] Analysis
+                         Coverage scan (tool or static fallback)
+                         + dependency analysis + mocking strategy
+                         + edge case/boundary value enumeration
+                      -> HARD-GATE: confirm scope + mocking strategy
+                      -> [Phase 2] Generation
+                         Unit tests (happy path + edge cases)
+                         + integration tests (if needed)
+                         + regression tests (if --regression)
+                      -> [Phase 3] Verification
+                         Step 1: Execute tests (up to 2 fix retries, test code only)
+                         Step 2: Mutation testing (condition inversion, return change)
+                                 -> trivial tests flagged + strengthen attempt
+```
+
+### Framework Auto-Detection
+
+| Framework | Detection | Test pattern | Mock library |
+|-----------|-----------|-------------|-------------|
+| Jest | package.json jest dep | `*.test.ts` | jest.mock |
+| Vitest | package.json vitest | `*.test.ts` | vi.mock |
+| pytest | pyproject.toml / conftest.py | `test_*.py` | monkeypatch / unittest.mock |
+| JUnit | build.gradle junit | `*Test.java` | Mockito |
+| Go test | go.mod | `*_test.go` | testify/mock |
+| RSpec | Gemfile rspec | `*_spec.rb` | rspec-mocks |
+
+### Mocking Strategy (auto-detected per dependency)
+
+| Dependency | Default strategy |
+|-----------|-----------------|
+| DB (Repository, ORM) | Repository interface mock |
+| External API (HTTP) | HTTP client mock |
+| File system | Temp dir or fs mock |
+| Time (Date, Timer) | Fake timers |
+| Environment vars | Test-specific env |
+
+### Mutation Testing (Phase 3 quality verification)
+
+After tests pass, each test is verified for meaningfulness:
+1. Mutate target function (condition inversion, return value change, arithmetic swap)
+2. Re-run test -- if it still passes, the test is **trivial** (doesn't catch real logic changes)
+3. Attempt to strengthen trivial tests (1 try)
+4. Revert mutation immediately after each check
+5. Report quality score: meaningful / total non-skipped tests
+
+### Flags
+
+| Flag | Description |
+|------|-------------|
+| `--coverage-gap` | Auto-find and test low-coverage areas |
+| `--regression <path>` | Generate regression tests from a debug report |
+
+`--coverage-gap` and `--regression` are mutually exclusive.
+
+### Key Rules
+
+- **Never modify production code** -- test code only
+- **Mutations always reverted** -- never leave mutated code in place
+- **No trivial assertions** -- every test must have meaningful assertions
+
+---
+
+## memory
+
+Team knowledge base manager. Saves, searches, and maintains **git-committed, team-shared** records of decisions, patterns, bugs, and conventions. Completely separate from Claude Code's built-in personal auto-memory.
+
+```
+/memory save     -> analyze session -> extract team-valuable items -> per-item HARD-GATE -> save
+/memory show     -> scan docs/harness/memory/ -> categorized list
+/memory clean    -> identify stale records -> backup -> per-item HARD-GATE -> delete
+/memory search   -> grep keyword across all records
+```
+
+### How it differs from built-in auto-memory
+
+| | Built-in auto-memory | /memory |
+|-|---------------------|---------|
+| **Location** | `~/.claude/projects/` | `docs/harness/memory/` |
+| **Scope** | Personal, per-user | **Team-shared, git-committed** |
+| **Content** | Session context, preferences | Decisions, patterns, bugs, conventions |
+| **Index** | MEMORY.md | `docs/harness/memory/README.md` |
+| **CLAUDE.md** | Managed by built-in | **Never touched** |
+
+### Categories
+
+| Category | When to save | Team value |
+|----------|-------------|------------|
+| `decisions` | Architecture choices, technology selections | Prevents re-litigating decisions |
+| `bugs` | Non-obvious root causes, tricky debugging paths | Saves investigation time |
+| `patterns` | Reusable patterns, proven approaches, anti-patterns | Accelerates future work |
+| `todos` | Deferred work with context to pick up later | Enables work handoff |
+| `conventions` | Naming rules, style decisions, team norms | Discoverable by new members |
+
+Custom categories can be added freely.
+
+### Safety
+
+- **Per-item HARD-GATE** on both save and delete -- nothing happens without explicit confirmation
+- **Backup before delete** -- `.harness/memory_backup/<timestamp>/` created before any cleanup
+- **Date parse safety** -- unparseable dates excluded from staleness checks
 
 ---
 
