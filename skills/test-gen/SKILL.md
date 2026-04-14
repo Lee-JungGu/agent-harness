@@ -413,16 +413,31 @@ Print final status (in `user_lang`):
 
 ### Cleanup & Commit
 
+#### Artifact Cleanup Safety Guard
+
+Before deleting any `docs/harness/` subdirectory, these checks are **mandatory**:
+
+1. **Validate slug**: Read `docs_path` from `.harness/state.json`, extract `<slug>` (last path segment). If `<slug>` is empty, null, or whitespace → **ABORT** cleanup and warn user (in `user_lang`): "Cannot determine delete target — slug is empty."
+2. **Path depth check**: Delete target must match pattern `docs/harness/<non-empty-slug>/` — exactly one level below `docs/harness/`. **NEVER** delete `docs/harness/` itself during normal cleanup. Additionally: slug must **NOT** be `memory` (reserved for `/memory` skill), must **NOT** contain `..` or `/`, and must **NOT** be a single dot `.`. If any of these conditions fail → **ABORT** and warn user.
+3. **Display before delete**: Print the exact delete target path (e.g., `docs/harness/my-task/`) to the user before executing. Do not silently delete.
+
+**Full `docs/harness/` cleanup (only when user explicitly requests):**
+If the user explicitly asks to delete the **entire** `docs/harness/` directory:
+1. List all subdirectories with their file counts
+2. If `docs/harness/memory/` exists, list it **separately** with warning: "This directory contains team knowledge managed by `/memory` skill."
+3. Warn (in `user_lang`): "`docs/` is git-ignored — all session artifacts will be permanently deleted and **cannot be recovered**."
+4. Ask confirmation via AskUserQuestion (yes/no) — only proceed on explicit "Yes, delete all"
+
 Ask the user using AskUserQuestion (in `user_lang`):
   header: "Commit"
   question: "Test generation complete. Choose how to finish:"
   options:
-    - label: "Commit tests only (Recommended)" / description: "Clean up artifacts (.harness/, docs/harness/) then commit test files only"
+    - label: "Commit tests only (Recommended)" / description: "Clean up artifacts (.harness/, docs/harness/<slug>/) then commit test files only"
     - label: "Commit all" / description: "Commit everything including artifacts (test_changes.md, test_report.md)"
     - label: "No commit" / description: "Clean up .harness/ only, do not commit (changes remain in working tree)"
 
-Actions per selection:
-- "Commit tests only": delete `.harness/` dir, delete `docs/harness/<slug>/` dir, stage and commit new test files
+Actions per selection (apply Safety Guard before each delete):
+- "Commit tests only": delete `.harness/` dir, delete `docs/harness/<slug>/` dir (**only** this slug dir — verify via guard), stage and commit new test files
 - "Commit all": delete `.harness/` dir, stage and commit test files + `docs/harness/<slug>/` files
 - "No commit": delete `.harness/` dir only
 
