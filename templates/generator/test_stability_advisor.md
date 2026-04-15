@@ -53,3 +53,11 @@ Write all output in **{user_lang}**.
 Write your review to: `{output_path}`
 
 Do NOT write code or test code. Focus on substantive reliability risks, not theoretical edge cases. Be actionable and concise.
+
+## Output Contract
+
+CRITICAL: Your response must be EXACTLY ONE LINE in this format:
+```
+review written — {output_path} ({N} scenarios, {M} recommendations)
+```
+No other text after this line. Write all detailed review to the output file above.

@@ -50,3 +50,11 @@ Write all output in **{user_lang}**.
 - Do **not** define implementation details such as function signatures, data structures, or algorithms — the Generator phase decides those.
 - Output only `spec.md`; do not create any other files.
 - Be concise — focus on key findings and actionable criteria.
+
+## Output Contract
+
+CRITICAL: Your response must be EXACTLY ONE LINE in this format:
+```
+spec.md generated — {N} acceptance criteria, {M} edge cases
+```
+No other text after this line. Write all detailed results to spec.md.

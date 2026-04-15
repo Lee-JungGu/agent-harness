@@ -50,3 +50,11 @@ Write your proposal to: `{output_path}`
 
 Do NOT write code or test code. Analyze independently. Focus on what can go wrong, not what will go right.
 Be concise — focus on key findings, not exhaustive analysis.
+
+## Output Contract
+
+CRITICAL: Your response must be EXACTLY ONE LINE in this format:
+```
+qa_specialist proposal written — {output_path}
+```
+No other text after this line. Write all detailed analysis to the output file above.

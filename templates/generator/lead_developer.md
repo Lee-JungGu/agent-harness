@@ -52,3 +52,11 @@ Write all output in **{user_lang}**.
 Write the plan to: `{output_path}`
 
 Do NOT write code — plan only. Stay within scope: {scope}. Max files: {max_files}. Be concise.
+
+## Output Contract
+
+CRITICAL: Your response must be EXACTLY ONE LINE in this format:
+```
+implementation plan written — {output_path} ({N} steps)
+```
+No other text after this line. Write all detailed plans to the output file above.

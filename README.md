@@ -38,6 +38,11 @@ claude plugin install agent-harness@agent-harness-marketplace
 /workflow fix login timeout bug --mode multi       # deep multi-agent analysis, ~2-2.5x tokens
 /workflow fix bug --model-config balanced          # Sonnet executor + Opus advisor (cost-efficient)
 
+/workflow plan "add user auth"                     # phase mode: plan only, end session
+/workflow generate                                 # phase mode: resume from plan, generate only
+/workflow verify                                   # step mode: mechanical verification only
+/workflow evaluate                                 # step mode: evaluation only
+
 /workflow draft product requirements spec           # works without git too (non-dev tasks)
 
 /debug "NullPointerException in UserController"    # hypothesis-driven debugging
@@ -79,12 +84,14 @@ claude plugin install agent-harness@agent-harness-marketplace
 
 Inspired by Anthropic's [Advisor Strategy](https://claude.com/blog/the-advisor-strategy), sub-agents can run on different models to optimize cost vs. quality. Select a preset at startup or via `--model-config`:
 
-| Preset | Executor | Advisor | Evaluator | Use case |
-|--------|----------|---------|-----------|----------|
-| **default** | (parent) | (parent) | (parent) | No change, inherit parent model |
-| **all-opus** | Opus | Opus | Opus | Maximum quality |
-| **balanced** | Sonnet | Opus | Opus | Recommended — cost-efficient with quality judgment |
-| **economy** | Haiku | Sonnet | Sonnet | Maximum savings, basic quality |
+| Preset | Executor | Advisor | Evaluator | Verifier | Use case |
+|--------|----------|---------|-----------|----------|----------|
+| **default** | (parent) | (parent) | (parent) | Haiku | No change, inherit parent model |
+| **all-opus** | Opus | Opus | Opus | Haiku | Maximum quality |
+| **balanced** | Sonnet | Opus | Opus | Haiku | Recommended — cost-efficient with quality judgment |
+| **economy** | Haiku | Sonnet | Sonnet | Haiku | Maximum savings, basic quality |
+
+> **Verifier is always Haiku** — Layer 1 Mechanical Verification only executes commands and parses exit codes, so the lowest-cost model is always sufficient.
 
 **Role mapping across all skills:**
 - **Executor**: bulk work — analysis, code generation, proposals (cheaper model OK)
@@ -110,31 +117,28 @@ Falls back to text-based input when AskUserQuestion is unavailable.
 
 ## workflow
 
-Separates planning, implementation, and review into distinct phases with file-based handoffs. Each phase uses **specialized sub-agents with expert personas** that collaborate through structured debate and review patterns, eliminating single-agent blind spots.
+**Thin Orchestrator** architecture — the orchestrator manages state transitions and dispatches sub-agents with minimal context (~8-15K tokens). Sub-agents return 1-line summaries; detailed results are written to files. This achieves **40-60% token savings** compared to fat orchestrator designs while maintaining quality through **3-layer mechanical quality gates**.
 
 ```
-/workflow  -> [Setup] Auto-detect + mode selection (single / standard / multi)
-                        -> [Phase 1] Planner
+/workflow  -> [Setup] Auto-detect + mode/style selection
+                        -> [Plan] Planner sub-agent
                            single:   1 agent explores + writes spec.md
-                           standard: 2 specialists propose independently
-                                     -> Synthesis: merge into spec.md (no cross-critique)
-                           multi:    3 specialists propose independently
-                                     -> Cross-critique: each reviews others
-                                     -> Synthesis: merge into spec.md
+                           standard: 2 specialists propose -> Synthesis
+                           multi:    3 specialists -> Cross-critique -> Synthesis
                         -> Confirmation Gate: user approves spec
-                        -> [Phase 2] Generator
+                        -> [Generate] Generator sub-agent
                            single:   1 agent implements code
-                           standard: Lead Developer creates plan
-                                     -> 1 combined advisor reviews plan
-                                     -> Lead Developer codes with feedback
-                           multi:    Lead Developer creates plan
-                                     -> 2 advisors review plan in parallel
-                                     -> Lead Developer codes with feedback
-                        -> [Phase 3] Evaluator (isolated subagent): test + review
-                        -> PASS -> Done / FAIL -> Back to Phase 2 (max N rounds)
+                           standard: Lead Dev plan -> Combined Advisor -> Implementation
+                           multi:    Lead Dev plan -> 2 Advisors parallel -> Implementation
+                        -> [Verify] Layer 1 Mechanical (build/test/lint/type-check/TODO scan)
+                           FAIL -> auto-retry Generator (max 3x)
+                        -> [Evaluate] Layer 2 Structural + Layer 3 LLM Judgment
+                           L2 FAIL -> auto-retry (max 2x)
+                           L3 FAIL -> user Fix/Accept (max N rounds)
+                        -> PASS -> Cleanup & Commit
 ```
 
-Claude handles everything directly -- no external CLI, no wrapper scripts. The plugin skill guides Claude through each phase natively.
+Claude handles everything directly -- no external CLI, no wrapper scripts.
 
 ### Auto-Detection
 
@@ -149,6 +153,20 @@ The harness detects language, test, and build commands from your project files:
 | `*.csproj` | C# | `dotnet test` | `dotnet build` |
 | `go.mod` | Go | `go test ./...` | `go build ./...` |
 | `Cargo.toml` | Rust | `cargo test` | `cargo build` |
+
+Additionally, lint and type-check commands are auto-detected:
+
+| Detected File / Config | Lint Command | Type-Check Command |
+|------------------------|-------------|-------------------|
+| `package.json` scripts.lint | `npm run lint` | — |
+| `.eslintrc*` / `eslint.config.*` | `npx eslint .` | — |
+| `tsconfig.json` | — | `npx tsc --noEmit` |
+| `pyproject.toml` [tool.ruff] | `ruff check .` | — |
+| `pyproject.toml` [tool.mypy] / `mypy.ini` | — | `mypy .` |
+| `.golangci.yml` | `golangci-lint run` | — |
+| `Cargo.toml` | `cargo clippy` | — |
+
+Override with `--lint-cmd` or `--type-check-cmd` if auto-detection is inaccurate.
 
 ### How it works
 
@@ -187,9 +205,33 @@ A single Lead Developer owns the implementation for code coherence, supported by
 
 The advisory review happens **before code is written**, catching issues when they're cheap to fix rather than expensive to rework.
 
-#### Phase 3 -- Evaluator (Isolated)
+#### Verify -- Mechanical Quality Gates (Layer 1)
 
-Runs as an isolated sub-agent with research-backed bias reduction:
+After code generation, a mechanical verification step runs **before** the LLM evaluator:
+
+| Check | Criteria | On Failure |
+|-------|----------|-----------|
+| **Build** | Exit code 0 | Stop, retry Generator |
+| **Test** | All tests pass | Record failures, continue |
+| **Lint** | No errors (warnings OK) | Record errors, continue |
+| **Type Check** | Exit code 0 | Record errors, continue |
+| **TODO/FIXME scan** | Completeness markers in changed files | Warning (configurable) |
+
+If Layer 1 fails, the Generator is automatically retried up to 3 times with concrete error logs — no user intervention needed. This catches **50%+ of issues** without using LLM judgment.
+
+#### Evaluate -- Structural + LLM Verification (Layer 2 + 3)
+
+Runs as an isolated sub-agent with 2-layer evaluation:
+
+**Layer 2 — Structural Verification** (narrow YES/NO checks):
+- Each acceptance criterion: satisfied? `file:line` evidence required
+- Each changed file: maps to a spec requirement? Unmapped = scope violation
+- Test coverage per criterion, diff-based risk review (error handling, resource leaks, security)
+- If any check fails → FAIL immediately, skip Layer 3, auto-retry up to 2 times
+
+**Layer 3 — LLM Judgment** (only if Layer 2 passes):
+
+Runs with research-backed bias reduction:
 
 | Technique | Research Basis |
 |-----------|---------------|
@@ -200,7 +242,7 @@ Runs as an isolated sub-agent with research-backed bias reduction:
 | **Risk-before-PASS** (identify key risks + verify with code evidence) | Confirmation bias: structural forced consideration of counterevidence |
 | **Rubric decomposition** (5 criteria with inline sub-checks) | G-Eval, RocketEval: finer granularity reduces evaluation bias |
 
-7. If FAIL, the user is asked whether to retry (up to max rounds)
+7. If Layer 1 FAIL → auto-retry Generator (max 3). If Layer 2 FAIL → auto-retry (max 2). If Layer 3 FAIL → user asked whether to fix (up to max rounds)
 8. On completion, the user is asked whether to commit the artifacts
 
 ### Token Cost vs. Quality Trade-off
@@ -213,6 +255,14 @@ Runs as an isolated sub-agent with research-backed bias reduction:
 
 Higher modes use more tokens per run but have higher first-pass success rates, often reducing total cost by avoiding retry rounds. Standard mode is recommended for most tasks — it provides significant quality improvement at modest token cost.
 
+### Execution Styles
+
+| Style | Usage | Behavior |
+|-------|-------|----------|
+| **auto** (default) | `/workflow "task"` | Full pipeline, user gates at spec approval and FAIL only |
+| **phase** | `/workflow plan "task"` then `/workflow generate` | Each phase ends session; resume in next session for max token savings |
+| **step** | `/workflow verify` or `/workflow evaluate` | Execute single step only |
+
 ### Options
 
 | Option | Default | Description |
@@ -222,6 +272,8 @@ Higher modes use more tokens per run but have higher first-pass success rates, o
 | scope | auto-detected | Restrict file modifications to a pattern |
 | max rounds | 3 | Maximum Generator/Evaluator retry cycles |
 | max files | 20 | Maximum number of files that can be modified |
+| lint-cmd | auto-detected | Override lint command |
+| type-check-cmd | auto-detected | Override type-check command |
 
 Example: `/workflow fix auth bug --mode single --model-config balanced --scope "src/auth/**"`
 
@@ -264,7 +316,8 @@ The harness communicates in the **user's language** -- automatically detected fr
 docs/harness/<task-slug>/
   spec.md                           # Planner output (preserved)
   changes.md                        # Generator output (preserved)
-  qa_report.md                      # Evaluator output (preserved)
+  verify_report.md                  # Layer 1 verification results (overwritten each run)
+  qa_report.md                      # Evaluator output — Layer 2 + Layer 3 (preserved)
 ```
 
 ### Plugin Compatibility

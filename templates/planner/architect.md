@@ -49,3 +49,11 @@ Write your proposal to: `{output_path}`
 
 Do NOT write code. Analyze independently. Focus on architecture, not implementation details.
 Be concise — focus on key findings, not exhaustive analysis.
+
+## Output Contract
+
+CRITICAL: Your response must be EXACTLY ONE LINE in this format:
+```
+architect proposal written — {output_path}
+```
+No other text after this line. Write all detailed analysis to the output file above.

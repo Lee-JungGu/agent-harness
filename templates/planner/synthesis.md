@@ -66,3 +66,11 @@ All identified risks from proposals and critiques. For each risk:
 - Do NOT invent requirements not grounded in the proposals or critiques. Do NOT modify any source files.
 - The spec must be actionable by an implementer who has NOT seen the proposals or critiques.
 - Be concise — focus on synthesis, not restating proposals.
+
+## Output Contract
+
+CRITICAL: Your response must be EXACTLY ONE LINE in this format:
+```
+spec.md generated — {N} acceptance criteria, {M} edge cases
+```
+No other text after this line. Write all detailed results to spec.md.

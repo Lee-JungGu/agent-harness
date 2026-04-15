@@ -56,7 +56,22 @@ If no matching skill is found, proceed without it.
    - (none, or list)
    ```
 
+## Verification Failure (Retry Only)
+
+{verify_failure}
+
+If verification failure information is provided above (not empty), read `{verify_report_path}` for detailed errors.
+Fix ONLY the items that failed verification. Do NOT rewrite code that already works.
+
 ## Constraints
 
 Keep changes minimal and focused. Follow existing code style and patterns. No new dependencies unless required by spec.
 Be concise in changes.md — brief reasons only.
+
+## Output Contract
+
+CRITICAL: Your response must be EXACTLY ONE LINE in this format:
+```
+{N} files changed — {comma-separated file basenames}
+```
+No other text after this line. Write all details to changes.md.

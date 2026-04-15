@@ -56,3 +56,11 @@ Write your critique to: `{output_path}`
 - Do NOT write implementation code or explore the codebase — base your critique entirely on the proposals and your prior expertise.
 - Be specific — reference concrete points from the proposals. Disagree when warranted; agreement without evidence is not useful.
 - Be concise — focus on key findings, not exhaustive analysis.
+
+## Output Contract
+
+CRITICAL: Your response must be EXACTLY ONE LINE in this format:
+```
+{persona_name} critique written — {output_path}
+```
+No other text after this line. Write all detailed analysis to the output file above.

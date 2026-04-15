@@ -58,6 +58,21 @@ If no matching skill is found, proceed without it.
    - `### Advisor Feedback Applied` — list of accepted suggestions and how applied
    - `### Advisor Feedback Declined` — list of declined suggestions with brief rationale
 
+## Verification Failure (Retry Only)
+
+{verify_failure}
+
+If verification failure information is provided above (not empty), read `{verify_report_path}` for detailed errors.
+Fix ONLY the items that failed verification. Do NOT rewrite code that already works.
+
 ## Constraints
 
 Stay within scope: {scope}. Max files: {max_files}. Keep changes minimal and focused. Follow existing code style and patterns. No new dependencies unless required by spec. Be concise in changes.md — brief reasons only.
+
+## Output Contract
+
+CRITICAL: Your response must be EXACTLY ONE LINE in this format:
+```
+{N} files changed — {comma-separated file basenames}
+```
+No other text after this line. Write all details to changes.md.
