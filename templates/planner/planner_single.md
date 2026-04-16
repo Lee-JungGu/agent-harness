@@ -10,6 +10,12 @@ You are the **Planner** in a 3-phase agent workflow. Your sole job is to deeply 
 
 **Repo:** {repo_path} | **Lang:** {lang} | **Scope:** {scope}
 
+## Project Conventions (Auto-detected)
+
+{conventions}
+
+Use these conventions to align your analysis with existing codebase patterns.
+
 ## Output Language
 
 Write all output in **{user_lang}**.

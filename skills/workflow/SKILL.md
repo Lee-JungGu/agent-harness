@@ -103,14 +103,19 @@ Phase labels:
 
 Before starting a new task, check if `.harness/state.json` exists:
 
-1. Read state.json. Check `version` field:
+1. Read state.json. Check `skill` field (if present):
+   - If `skill` field exists and is NOT `"workflow"` → warn user (in detected language): "A `/{skill}` skill session is active in this directory." Ask via AskUserQuestion: header "Session Conflict", question "A `/{skill}` session exists. Delete it and start /workflow?", options: "Delete and start" / "Delete .harness/ and proceed with /workflow", "Cancel" / "Keep existing session and halt". If "Cancel" → halt. If "Delete and start" → delete `.harness/`, proceed to Step 1.
+   - If `skill` field is `"workflow"` or missing → continue below.
+
+2. Check `version` field:
    - **Missing** → v1 session. Print status with `[harness] Previous session detected (v1).`, then run v1 recovery logic (pre-v8 behavior). Do NOT apply v2 state machine.
    - **`"2.0"`** → v2 session. Continue below.
 
-2. Print status in standard format, prefixed with `[harness] Previous session detected.`
-3. Restore `model_config` from state.json. Apply to all subsequent sub-agent launches.
-4. If `has_git` is not in state.json, re-detect and store.
-5. Ask the user via AskUserQuestion (in `user_lang`):
+3. Print status in standard format, prefixed with `[harness] Previous session detected.`
+4. Restore `model_config` from state.json. Apply to all subsequent sub-agent launches.
+5. Restore `conventions` from state.json. If value starts with `"file:"`, verify the referenced file exists. If file missing, set `conventions → null` (will trigger Step 1.5 on resume).
+6. If `has_git` is not in state.json, re-detect and store.
+7. Ask the user via AskUserQuestion (in `user_lang`):
    - header: "Session"
    - question: "[harness] Previous session detected. [standard status]. Resume, restart, or stop?"
    - options:
@@ -120,7 +125,7 @@ Before starting a new task, check if `.harness/state.json` exists:
 
    Actions:
    - **Resume**: Jump to the state matching `phase`:
-     - `plan_ready` → Step 2 (Plan)
+     - `plan_ready` → Step 1.5 (Convention Scan) if `conventions` is `null` (not yet executed), else Step 2 (Plan). Note: `"skipped"` means user already decided — go to Step 2. If `conventions` starts with `"file:"` but the file does not exist, treat as `null` and re-run Step 1.5.
      - `planning` / `plan_done` → Step 3 (Gate) if spec.md exists, else Step 2
      - `generate_ready` → Step 4 (Generate)
      - `generating` / `generate_done` → Step 5 (Verify)
@@ -307,6 +312,7 @@ Retry loops:
     "todo_blocking": false
   },
   "docs_path": "docs/harness/<slug>/",
+  "conventions": null,
   "created_at": "<ISO8601>",
   "updated_at": "<ISO8601>"
 }
@@ -328,7 +334,63 @@ Retry loops:
   Scope     : <scope>
 ```
 
-13. **Proceed to Step 2** (Plan). If `run_style == "step"` and the CLI step is not `plan`, check prerequisites and jump to the requested step.
+13. **Proceed to Step 1.5** (Convention Scan). If `run_style == "step"` and the CLI step is not `plan`, check prerequisites and jump to the requested step after Step 1.5 completes.
+
+---
+
+### Step 1.5: Convention Scan
+
+*This step runs after Setup and before Plan, in all modes.*
+
+**CLAUDE.md Richness Check:**
+
+1. Check if `CLAUDE.md` exists in the repository root.
+2. If it exists, count lines: `wc -l CLAUDE.md` (or read and count).
+3. **Richness determination:**
+   - Exists AND ≥ 50 lines → **rich** → skip scan, read CLAUDE.md content as conventions.
+   - Exists AND < 50 lines → **sparse** → proceed to scan Q&A.
+   - Does not exist → **missing** → proceed to scan Q&A.
+
+**`conventions` field contract:** Always stores one of three values:
+- `null` → Step 1.5 not yet executed (initial state)
+- `"skipped"` → user explicitly chose to skip convention scan
+- `"file:<path>"` → conventions available at the given path (e.g., `"file:.harness/conventions.md"`)
+
+**Conventions injection rule (used by Step 2):** When `conventions` starts with `"file:"`, read the file at the path after the prefix. If the file does not exist, treat as `null` and re-run Step 1.5. When `conventions` is `null` or `"skipped"`, pass `{conventions}` as empty string.
+
+---
+
+**If rich (CLAUDE.md ≥ 50 lines):**
+
+1. Copy CLAUDE.md content to `.harness/conventions.md` (so all convention sources use the same path pattern).
+2. Store `conventions → "file:.harness/conventions.md"` in state.json.
+3. Print: `  [harness] Conventions: CLAUDE.md detected (rich). Copied to .harness/conventions.md`
+Proceed to Step 2 (Plan).
+
+**If sparse or missing:**
+
+Ask via AskUserQuestion (in `user_lang`):
+- header: "Convention Scan"
+- question: "No rich CLAUDE.md found. Scan codebase to auto-detect project conventions (DB, API, file structure, test patterns)? This helps the Planner align with existing patterns."
+- options:
+  - "Scan" / "Run convention scanner sub-agent (~1 token overhead)"
+  - "Skip" / "Proceed without convention data"
+
+**If "Skip":** Set `conventions → "skipped"` in state.json. Print: `  [harness] Conventions: skipped.` Proceed to Step 2.
+
+**If "Scan":**
+
+1. Read template: `{CLAUDE_PLUGIN_ROOT}/templates/planner/convention_scanner.md`
+2. Fill variables: `{repo_path}`, `{lang}`, `{scope}`, `{output_path}` = `.harness/conventions.md`.
+3. **Dispatch 1 sub-agent** (convention scanner). Model: if preset ≠ "default", use `model_config.advisor` (or haiku for economy).
+4. Parse return — first line should contain `"conventions written"`.
+5. Verify `.harness/conventions.md` exists.
+   - **If file does NOT exist** (sub-agent reported success but file missing): warn user (in `user_lang`): "Convention scan completed but output file not found." Ask via AskUserQuestion: header "Convention Scan Failed", question "Output file missing. Retry or skip?", options: "Retry" / "Re-run scanner", "Skip" / "Proceed without conventions". If "Retry" → re-dispatch sub-agent (max 2 retries). If "Skip" → set `conventions → "skipped"`. Do NOT store a `"file:"` reference to a non-existent file.
+6. Store `conventions → "file:.harness/conventions.md"` in state.json.
+7. Print: `  [harness] Conventions: scanned and saved to .harness/conventions.md`
+
+Update state.json: `updated_at → now`.
+Proceed to Step 2 (Plan).
 
 ---
 
@@ -343,6 +405,7 @@ Print: `[harness] Phase: Plan`
 1. Update phase → `"planning"`.
 2. Read template: `{CLAUDE_PLUGIN_ROOT}/templates/planner/planner_single.md`
 3. **Dispatch 1 sub-agent** with prompt built from template variables: `{task_description}`, `{repo_path}`, `{lang}`, `{scope}`, `{user_lang}`, `{spec_path}` = `docs/harness/<slug>/spec.md`.
+   - **Conventions injection:** If `conventions` in state.json starts with `"file:"`, extract the path after the prefix, read the file content, and pass as `{conventions}`. If `conventions` is `null`, `"skipped"`, or the referenced file does not exist, pass `{conventions}` as empty string.
    - Model: if preset ≠ "default", use `model_config.advisor`.
 4. Parse return → extract first line. Print: `  ✓ {first line}`
 5. Verify `spec.md` exists.
@@ -355,6 +418,7 @@ Print: `[harness] Phase: Plan`
 1. Update phase → `"planning"`.
 2. Read templates: `architect.md`, `senior_developer.md`
 3. **Dispatch 2 sub-agents in parallel.** Each gets: `{task_description}`, `{repo_path}`, `{lang}`, `{scope}`, `{user_lang}`, `{output_path}` = `.harness/planner/proposal_<persona>.md`.
+   - **Conventions injection:** If `conventions` starts with `"file:"`, read the file and pass as `{conventions}`. If `null`, `"skipped"`, or file missing, pass empty string.
    - Model: if preset ≠ "default", use `model_config.advisor`.
 4. Parse returns. Print: `  ✓ 2 proposals generated`
 5. Verify both proposal files exist.
@@ -375,6 +439,7 @@ Print: `[harness] Phase: Plan`
 1. Update phase → `"planning"`.
 2. Read templates: `architect.md`, `senior_developer.md`, `qa_specialist.md`
 3. **Dispatch 3 sub-agents in parallel.** Each gets template vars + `{output_path}` = `.harness/planner/proposal_<persona>.md`.
+   - **Conventions injection:** If `conventions` starts with `"file:"`, read the file and pass as `{conventions}`. If `null`, `"skipped"`, or file missing, pass empty string.
    - Model: if preset ≠ "default", use `model_config.advisor`.
 4. Parse returns. Print: `  ✓ 3 proposals generated`
 5. Verify all 3 proposal files exist.

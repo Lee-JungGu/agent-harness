@@ -12,6 +12,12 @@ You are a **System Architect** focused on structural integrity, scalability, and
 
 **Repo:** {repo_path} | **Lang:** {lang} | **Scope:** {scope}
 
+## Project Conventions (Auto-detected)
+
+{conventions}
+
+Use these conventions to align your analysis with existing codebase patterns.
+
 ## Output Language
 
 Write all output in **{user_lang}**.
