@@ -1,10 +1,66 @@
 # Agent Harness
 
-**Zero-setup, zero-dependency** 3-Phase workflow for Claude Code with **selectable single-agent or multi-agent persona mode**. Works for development tasks and non-development tasks (planning, document generation, analysis) alike.
+**Zero-setup, zero-dependency** multi-agent workflow harness for Claude Code with **3-layer quality gates** and **selectable single-agent or multi-agent persona mode**. Works for development tasks and non-development tasks (planning, document generation, analysis) alike.
 
-No dependencies required. No Python, no pip, no build steps -- just install the plugin and go.
+No dependencies required. No Python, no pip, no build steps — just install the plugin and go.
 
 Inspired by Anthropic's [Harness Design for Long-Running Application Development](https://www.anthropic.com/engineering/harness-design-long-running-apps).
+
+> Demo GIF coming soon — see [ROADMAP.md](ROADMAP.md#v82--planned).
+
+## At a Glance
+
+### Before / After
+
+**Without agent-harness:** You write a prompt, Claude implements changes, you run tests manually, find regressions, prompt again. No structured retry, no isolation, no audit trail.
+
+**With agent-harness:**
+```
+/workflow "add rate limiting to the API"
+```
+→ Two specialists (Architect + Senior Dev) propose plans independently  
+→ Synthesis produces `spec.md` — you review and approve  
+→ Lead Dev + Advisor implement code, write `changes.md`  
+→ Layer 1: build ✓ test 42/42 ✓ lint 0e/2w ✓ (auto-retry on fail, up to 3x)  
+→ Layer 2 + 3: isolated LLM evaluator reviews against spec, produces `qa_report.md`  
+→ PASS → you choose commit / no-commit
+
+### Terminal Output Sample
+
+```
+[harness] Task started!
+  Directory : /workspace/my-api
+  Branch    : harness/add-rate-limiting-to-the-api
+  Mode      : standard
+  Model     : balanced
+  Verifier  : haiku
+  Style     : auto
+  Language  : typescript
+  Test      : npm test
+  Build     : npm run build
+  Lint      : npm run lint
+  TypeCheck : npx tsc --noEmit
+  Scope     : (no limit)
+  Output    : docs/harness/add-rate-limiting-to-the-api/
+
+[harness] Phase: Verify (Layer 1 — Mechanical)
+[harness] Verify (Layer 1) complete.
+  Result : PASS — build ✓, test 42/42 ✓, lint 0e/2w, scan 0 TODO
+
+[harness] ✓ QA PASS — task complete.
+```
+
+### Token Cost vs. Quality
+
+| Mode | Best for | Token cost | First-pass success rate |
+|------|----------|------------|------------------------|
+| **single** | Small fixes, quick iterations | Baseline | ~60% *(estimated)* |
+| **standard** | General features, API changes | ~1.5x baseline *(estimated)* | ~80% *(estimated)* |
+| **multi** | Complex features, architecture | ~2-2.5x baseline *(estimated)* | ~90% *(estimated)* |
+
+Higher modes cost more per run but save total cost by reducing retry rounds. Standard is recommended for most tasks.
+
+> *(estimated)*: Figures are estimates based on internal dogfooding. A measurement benchmark harness is planned for v8.2+.
 
 ## Skills
 
@@ -91,7 +147,7 @@ Inspired by Anthropic's [Advisor Strategy](https://claude.com/blog/the-advisor-s
 | **balanced** | Sonnet | Opus | Opus | Haiku | Recommended — cost-efficient with quality judgment |
 | **economy** | Haiku | Sonnet | Sonnet | Haiku | Maximum savings, basic quality |
 
-> **Verifier is always Haiku** — Layer 1 Mechanical Verification only executes commands and parses exit codes, so the lowest-cost model is always sufficient.
+> **Verifier defaults to Haiku** — Layer 1 Mechanical Verification only executes commands and parses exit codes. Override with `--verifier-model sonnet|opus` for sensitive mechanical verification (e.g., concurrency failures, complex test diagnostics). Not recommended for routine use — Haiku is sufficient in the vast majority of cases.
 
 **Role mapping across all skills:**
 - **Executor**: bulk work — analysis, code generation, proposals (cheaper model OK)
@@ -274,8 +330,11 @@ Higher modes use more tokens per run but have higher first-pass success rates, o
 | max files | 20 | Maximum number of files that can be modified |
 | lint-cmd | auto-detected | Override lint command |
 | type-check-cmd | auto-detected | Override type-check command |
+| `--verifier-model <model>` | `haiku` | Override Layer 1 Verifier model. Allowed: `haiku`, `sonnet`, `opus`. Cost warning shown for sonnet/opus. |
+| `--output-dir <path>` | `docs/harness` | Override output directory base for spec, changes, verify, and QA reports. Relative path from repo root. Disallows: absolute paths, `..`, reserved names (`memory`, `spec`, `planner`, `generator`). |
 
 Example: `/workflow fix auth bug --mode single --model-config balanced --scope "src/auth/**"`
+Example: `/workflow add caching --output-dir build/harness --verifier-model sonnet`
 
 ### Git-Free Mode
 
@@ -959,6 +1018,15 @@ A standalone utility skill that optimizes your project's CLAUDE.md and markdown 
 - **Smart Routing**: Detects project state and suggests `/md-generate` when CLAUDE.md is missing or thin
 
 **Safety features**: Git-based rollback, HARD GATE confirmation before any changes, YAML frontmatter preservation, idempotency markers for safe re-runs.
+
+---
+
+## Roadmap
+
+See [ROADMAP.md](ROADMAP.md) for the full roadmap with rationale.
+
+- **v8.1** (Shipped): Path Validator single source, Auto-fix State Transition Table (invariants I1–I4), `--verifier-model` flexibility, `--output-dir` flag, Auto-fix proposal for Layer 1 failures (both `/workflow` and `/refactor`), `.github/` contribution templates
+- **v8.2+**: Custom persona override (`templates/user-override/`), GIF demo, external CLI wrapper
 
 ---
 

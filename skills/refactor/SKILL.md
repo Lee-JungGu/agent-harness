@@ -110,7 +110,7 @@ When the user provides a refactoring target (via $ARGUMENTS or in conversation),
        - label: "Proceed anyway" / description: "Continue with dirty working tree (risky)"
    If user selects "Commit first": stage and commit. If "Stash first": `git stash`. If "Proceed anyway": continue with warning noted.
 
-5. **Create directories:** `.harness/`, `.harness/refactor/`, `docs/harness/<slug>/`
+5. **Create directories:** `.harness/`, `.harness/refactor/`, `{docs_path}`
 6. **Create git branch:** `git checkout -b harness/refactor-<slug>`
 
 7. **Capture baseline test results:**
@@ -161,7 +161,9 @@ When the user provides a refactoring target (via $ARGUMENTS or in conversation),
 
    **Model config is set once at session start and cannot be changed mid-session.** To change, restart the session.
 
-   Store result as `model_config` object: `{ "preset": "<name>", "executor": "<model|null>", "advisor": "<model|null>", "evaluator": "<model|null>" }`. For the `default` preset, store `{ "preset": "default" }`.
+   **Verifier model** (for consistency with /workflow): `model_config.verifier = cli_flags.verifier_model ?? "haiku"`. Parse `--verifier-model <haiku|sonnet|opus>` from CLI if provided; reject other values. Note: `/refactor` does not currently dispatch a Verify sub-agent directly (test regression uses `test_cmd` directly), so this field is stored for future extension.
+
+   Store result as `model_config` object: `{ "preset": "<name>", "executor": "<model|null>", "advisor": "<model|null>", "evaluator": "<model|null>", "verifier": "<haiku|sonnet|opus>" }`. For the `default` preset, store `{ "preset": "default", "verifier": "<resolved>" }`.
 
 10. **Shared context collection (multi/comprehensive only):**
    Collect project context once and save to `.harness/context.md`:
@@ -171,7 +173,13 @@ When the user provides a refactoring target (via $ARGUMENTS or in conversation),
    - Files in scope (list with brief descriptions)
    This avoids duplicate codebase scans by sub-agents.
 
-11. **Write `.harness/state.json`** with fields: `skill` ("refactor"), `target`, `mode` ("single"/"multi"/"comprehensive"), `model_config` (from step 9), `user_lang`, `repo_name`, `repo_path`, `phase` ("plan_ready"), `round` (1), `max_rounds` (3), `scope` (user-provided or "(no limit)"), `branch` ("harness/refactor-<slug>"), `lang`, `test_cmd`, `build_cmd`, `test_available` (true/false), `baseline_test_results` (summary string), `baseline_failures` (list of known-failing tests, or []), `docs_path` ("docs/harness/<slug>/"), `created_at` (ISO8601).
+11. **Write `.harness/state.json`** with fields: `skill` ("refactor"), `target`, `mode` ("single"/"multi"/"comprehensive"), `model_config` (from step 9 — includes `verifier` field), `user_lang`, `repo_name`, `repo_path`, `phase` ("plan_ready"), `round` (1), `max_rounds` (3), `scope` (user-provided or "(no limit)"), `branch` ("harness/refactor-<slug>"), `lang`, `test_cmd`, `build_cmd`, `test_available` (true/false), `baseline_test_results` (summary string), `baseline_failures` (list of known-failing tests, or []), `docs_path` ("docs/harness/<slug>/"), `verify: { autofix_attempted: false }`, `autofix` (null), `created_at` (ISO8601).
+
+> `verify.autofix_attempted`: nested field (aligned with `/workflow` schema — not a flat top-level field). Session-wide once-only limit — applies across all steps, not reset on round increment. `/workflow` Layer 1/2 fields are absent from `/refactor` `verify` object.
+> `autofix` transitions to `{ "last_patch_path": ".harness/refactor/auto_fix_patch.md", "applied": "proposed"|"applied"|"rejected"|"stopped", "triggered_at": "<ISO8601>" }` during H2 flow.
+> **Backward compat (reader-union)**: Reader: check `verify.autofix_attempted` first; if missing/null, fall back to top-level `autofix_attempted` (legacy pre-v8.1). Writer: write only to `verify.autofix_attempted`.
+> Example — pre-v8.1 session fixture: `{ "autofix_attempted": true, "autofix": null, ... }` → reader-union result: effective `verify.autofix_attempted == true` (fallback hit). Next write: `{ "verify": { "autofix_attempted": true }, "autofix": null, ... }`.
+
 12. **Print setup summary** (in `user_lang`):
     ```
     [harness] Refactor started!
@@ -179,6 +187,7 @@ When the user provides a refactoring target (via $ARGUMENTS or in conversation),
       Branch   : harness/refactor-<slug>
       Mode     : <single | multi | comprehensive>
       Model    : <preset name>
+      Verifier : N/A (test_cmd direct — future extension)
       Language : <lang>
       Test     : <test_cmd or "none">
       Build    : <build_cmd or "none">
@@ -198,7 +207,7 @@ Read `mode` from state.json and branch accordingly.
    - What is the impact scope? (which files depend on the target, which files does the target depend on)
    - What tests cover the target code?
    - What is the safest order of changes?
-3. Write `refactor_plan.md` to `docs/harness/<slug>/refactor_plan.md` with the following sections (translate headings to `user_lang`):
+3. Write `refactor_plan.md` to `{docs_path}refactor_plan.md` with the following sections (translate headings to `user_lang`):
 
    ### Goal
    What structural improvement is being achieved? One or two sentences.
@@ -244,7 +253,7 @@ If `.harness/context.md` was not created in Setup (e.g., resuming from session r
 
 1. Read the synthesis template: `{CLAUDE_PLUGIN_ROOT}/templates/refactor/synthesis.md`
 2. Read both analysis files from Step 2b-M.
-3. Interpret the synthesis template with: `{target_description}`, `{user_lang}`, `{all_analyses}` (concatenated with author labels), `{plan_path}`: `docs/harness/<slug>/refactor_plan.md`, `{test_cmd}`, `{baseline_test_results}`
+3. Interpret the synthesis template with: `{target_description}`, `{user_lang}`, `{all_analyses}` (concatenated with author labels), `{plan_path}`: `{docs_path}refactor_plan.md`, `{test_cmd}`, `{baseline_test_results}`
 4. Follow the synthesis rules to write `refactor_plan.md`.
 5. Update state.json: phase → `"plan_ready"`.
 6. Inform the user (in `user_lang`):
@@ -279,7 +288,7 @@ Same as Step 2a-M.
 
 1. Read the synthesis template: `{CLAUDE_PLUGIN_ROOT}/templates/refactor/synthesis.md`
 2. Read all 6 intermediate files (3 analyses + 3 critiques).
-3. Interpret the synthesis template with: `{target_description}`, `{user_lang}`, `{all_analyses}` (concatenated with author labels), `{all_critiques}` (concatenated with author labels — pass empty string `""` if multi mode), `{plan_path}`: `docs/harness/<slug>/refactor_plan.md`, `{test_cmd}`, `{baseline_test_results}`
+3. Interpret the synthesis template with: `{target_description}`, `{user_lang}`, `{all_analyses}` (concatenated with author labels), `{all_critiques}` (concatenated with author labels — pass empty string `""` if multi mode), `{plan_path}`: `{docs_path}refactor_plan.md`, `{test_cmd}`, `{baseline_test_results}`
 4. Follow the synthesis rules to write `refactor_plan.md`.
 5. Update state.json: phase → `"plan_ready"`.
 6. Inform the user (in `user_lang`):
@@ -326,18 +335,60 @@ Read `mode` from state.json and branch accordingly.
    b. Execute the refactoring change.
    c. Run `test_cmd` (if available). Compare results with baseline.
    d. **If new test failure:**
+
+      <HARD-GATE>
       Ask using AskUserQuestion (in `user_lang`):
         header: "Regression"
         question: "Test regression detected (Step {N}). Failed: {test}."
         options:
+          - label: "Auto-fix proposal" / description: "Let AI (Opus) analyze the failure and propose a minimal diff (1 attempt only)" ← **HIDE if `verify.autofix_attempted == true OR state.autofix != null`** (session-wide once-only — applies across all steps)
           - label: "Revert step" / description: "Undo this step, mark as failed, continue to next step"
           - label: "Manual fix" / description: "Pause for manual fix, then re-run tests"
           - label: "Abort refactoring" / description: "Stop all refactoring and go to cleanup"
+      </HARD-GATE>
+
       If "Revert step": undo the step, mark it as failed in changes.md, continue to next step.
       If "Manual fix": wait for user to fix, then re-run tests.
       If "Abort refactoring": go to Step 7 (cleanup).
+
+      **If "Auto-fix proposal":**
+      1. Update state.json: `autofix → { "last_patch_path": ".harness/refactor/auto_fix_patch.md", "applied": "proposed", "triggered_at": "<ISO8601>" }`
+      2. Read template: `{CLAUDE_PLUGIN_ROOT}/templates/refactor/auto_fix_proposer.md`
+      3. Fill variables (pass **paths only** — Proposer reads files directly):
+         - `{refactor_step_description}` = current step description from refactor_plan.md
+         - `{test_output_path}` = path where test output was written (or inline if short)
+         - `{changed_files_list}` = list of files modified in this step
+         - `{output_path}` = `.harness/refactor/auto_fix_patch.md`
+      4. **Dispatch Auto-fix Proposer sub-agent** with `model: model_config.advisor ?? "opus"`.
+      5. Parse return 1-line. Extract `confidence` level.
+      6. Verify `.harness/refactor/auto_fix_patch.md` exists.
+
+      <HARD-GATE>
+      Show confidence level + 1-line summary.
+      Print before question: `[harness] ℹ Auto-fix model: {model_config.advisor ?? 'opus'}`
+      Ask via AskUserQuestion (in `user_lang`):
+        header: "Auto-fix"
+        question: "Proposed fix generated (confidence: {level}). [If confidence == Low: ⚠ Low confidence — review the diff carefully before applying.] Apply the patch?"
+        options:
+          - label: "Apply patch" / description: "Apply the proposed diff and re-run tests (retry counter unchanged)"
+          - label: "Reject" / description: "Discard proposal, return to regression gate (Auto-fix hidden)"
+          - label: "Stop" / description: "Halt for manual intervention"
+      </HARD-GATE>
+
+      After 2nd HARD-GATE decision: set `verify.autofix_attempted = true` in state.json (session-wide once-only — applies across all steps).
+
+      **If "Apply patch":**
+      1. Snapshot: `git stash` (has_git) or copy to `.harness/autofix_pre_apply/` (no git).
+      2. Apply unified diff from `.harness/refactor/auto_fix_patch.md`.
+         - Apply failure → restore snapshot, warn user, return to regression HARD-GATE (Auto-fix hidden).
+      3. Update state.json: `autofix.applied → "applied"`.
+      4. Re-run `test_cmd` (retry counter unchanged):
+         - **PASS** → mark step as done, continue.
+         - **FAIL** → update `autofix.applied → "stopped"`. Return to regression HARD-GATE (Auto-fix hidden).
+
+      **If "Reject":** Update `autofix.applied → "rejected"`. Return to regression HARD-GATE (Auto-fix hidden).
    e. If tests pass (or no tests): mark step as done, continue.
-3. After all steps complete, write `docs/harness/<slug>/changes.md` with sections:
+3. After all steps complete, write `{docs_path}changes.md` with sections:
    - Round {round_num} Changes
    - Completed Steps (with checkbox status from plan)
    - Modified Files — path + brief reason
@@ -365,7 +416,7 @@ Read `mode` from state.json and branch accordingly.
    h. Run `test_cmd` (if available). Compare results with baseline.
    i. **If new test failure:** Same handling as Step 4-S.2.d.
    j. If tests pass: mark step as done, continue.
-3. After all steps complete, write `docs/harness/<slug>/changes.md` with sections:
+3. After all steps complete, write `{docs_path}changes.md` with sections:
    - Round {round_num} Changes
    - Completed Steps (with checkbox status)
    - Safety Advisor Assessments (per step: GO/CAUTION/STOP + brief note)
@@ -386,10 +437,10 @@ Read `mode` from state.json and branch accordingly.
 
 1. Update state.json: phase → `"eval_ready"`.
 2. Read the evaluator template: `{CLAUDE_PLUGIN_ROOT}/templates/refactor/evaluator.md`
-3. **Prepare the subagent prompt.** Fill in: `{refactor_plan_content}` (structural goals only — strip implementation details), `{changed_files_list}` (file paths only from changes.md — **strip all reasoning** to prevent anchoring), `{test_available}`, `{build_cmd}`, `{test_cmd}`, `{baseline_test_results}`, `{baseline_failures}` (pre-existing failures to ignore), `{round_num}`, `{scope}`, `{user_lang}` from state.json, `{qa_report_path}`: `docs/harness/<slug>/qa_report.md`.
+3. **Prepare the subagent prompt.** Fill in: `{refactor_plan_content}` (structural goals only — strip implementation details), `{changed_files_list}` (file paths only from changes.md — **strip all reasoning** to prevent anchoring), `{test_available}`, `{build_cmd}`, `{test_cmd}`, `{baseline_test_results}`, `{baseline_failures}` (pre-existing failures to ignore), `{round_num}`, `{scope}`, `{user_lang}` from state.json, `{qa_report_path}`: `{docs_path}qa_report.md`.
    **Do NOT include:** Execution reasoning, safety advisor assessments, why files were changed, or references to "Generator"/"AI"/"agent" as code author.
-4. **Launch the Evaluator subagent** using the Agent tool. If `model_config.preset` is not `"default"`, pass `model` parameter per the Model Selection table (Evaluator → evaluator role). Instruct it to write the QA report to `docs/harness/<slug>/qa_report.md`.
-5. When the subagent returns, read `docs/harness/<slug>/qa_report.md` to get the verdict.
+4. **Launch the Evaluator subagent** using the Agent tool. If `model_config.preset` is not `"default"`, pass `model` parameter per the Model Selection table (Evaluator → evaluator role). Instruct it to write the QA report to `{docs_path}qa_report.md`.
+5. When the subagent returns, read `{docs_path}qa_report.md` to get the verdict.
 
 ### Step 6: Verdict & Loop
 
@@ -428,13 +479,13 @@ Ask the user using AskUserQuestion (in `user_lang`):
   header: "Commit"
   question: "Implementation complete. Choose how to finish:"
   options:
-    - label: "Commit code only (Recommended)" / description: "Clean up artifacts (.harness/, docs/harness/<slug>/) then commit code changes only"
+    - label: "Commit code only (Recommended)" / description: "Clean up artifacts (.harness/, {docs_path}) then commit code changes only"
     - label: "Commit all" / description: "Commit everything including artifacts (refactor_plan.md, changes.md, qa_report.md)"
     - label: "No commit" / description: "Clean up .harness/ only, do not commit (changes remain in working tree)"
 
 Actions per selection (apply Safety Guard before each delete):
-- "Commit code only": delete `.harness/` dir, delete `docs/harness/<slug>/` dir (**only** this slug dir — verify via guard), stage and commit remaining code changes
-- "Commit all": delete `.harness/` dir, stage and commit `docs/harness/<slug>/` files + code changes
+- "Commit code only": delete `.harness/` dir, delete `{docs_path}` dir (**only** this slug dir — verify via guard), stage and commit remaining code changes
+- "Commit all": delete `.harness/` dir, stage and commit `{docs_path}` files + code changes
 - "No commit": delete `.harness/` dir only
 
 ### Status Check (anytime)
@@ -445,12 +496,14 @@ If user asks for status, print status in the standard format defined above.
 
 Sub-agents can run on different models depending on the selected `model_config` preset. The presets map each role (executor, advisor, evaluator) to a model:
 
-| Preset | executor | advisor | evaluator |
-|--------|----------|---------|-----------|
-| default | (parent inherit) | (parent inherit) | (parent inherit) |
-| all-opus | opus | opus | opus |
-| balanced | sonnet | opus | opus |
-| economy | haiku | sonnet | sonnet |
+| Preset | executor | advisor | evaluator | verifier |
+|--------|----------|---------|-----------|----------|
+| default | (parent inherit) | (parent inherit) | (parent inherit) | haiku (default) |
+| all-opus | opus | opus | opus | haiku (default) |
+| balanced | sonnet | opus | opus | haiku (default) |
+| economy | haiku | sonnet | sonnet | haiku (default) |
+
+> **Verifier defaults to haiku; override with `--verifier-model sonnet|opus`** (stored in `model_config.verifier`). `/refactor` currently does not dispatch a separate Verify sub-agent — test regression uses `test_cmd` directly. The verifier field is stored for future extension. Auto-fix Proposer uses `model_config.advisor ?? "opus"` instead.
 
 Each sub-agent is assigned a role. The following table defines the concrete model for every sub-agent under each preset:
 

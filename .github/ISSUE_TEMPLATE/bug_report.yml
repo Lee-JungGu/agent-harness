@@ -1,0 +1,84 @@
+name: Bug Report
+description: Report a bug or unexpected behavior in agent-harness
+labels: ["bug"]
+body:
+  - type: textarea
+    id: description
+    attributes:
+      label: Bug description
+      description: What went wrong? What did you see?
+      placeholder: Describe the bug clearly and concisely.
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: How can we reproduce this bug?
+      placeholder: |
+        1. Run `/workflow "..." --mode standard`
+        2. Select mode: ...
+        3. Observe error at step ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+      description: What did you expect to happen?
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+      description: What actually happened? Include any error messages.
+    validations:
+      required: true
+
+  - type: input
+    id: skill
+    attributes:
+      label: Skill
+      description: Which skill triggered the bug?
+      placeholder: "e.g. /workflow, /refactor, /debug"
+    validations:
+      required: false
+
+  - type: input
+    id: plugin_version
+    attributes:
+      label: Plugin version
+      description: Found in .claude-plugin/plugin.json or `claude plugin list`
+      placeholder: "e.g. 8.1.0"
+    validations:
+      required: false
+
+  - type: input
+    id: claude_version
+    attributes:
+      label: Claude Code version
+      description: Run `claude --version`
+      placeholder: "e.g. 1.x.x"
+    validations:
+      required: false
+
+  - type: input
+    id: os
+    attributes:
+      label: OS
+      placeholder: "e.g. macOS 14.5, Windows 11, Ubuntu 24.04"
+    validations:
+      required: false
+
+  - type: textarea
+    id: state_json
+    attributes:
+      label: Relevant state.json snippet (optional)
+      description: Paste the relevant portion of .harness/state.json. Remove any secrets.
+      render: json
+    validations:
+      required: false
