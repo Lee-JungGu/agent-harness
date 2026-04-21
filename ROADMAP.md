@@ -2,29 +2,29 @@
 
 ## v8.x — Shipped
 
+**v8.1.0** — Release hardening: Path Validator + state invariants + schema parity
+
+- **H1 — Verifier model flexibility**: Layer 1 Mechanical Verification primarily runs commands and parses exit codes, so haiku is sufficient by default. An opt-in override is provided for high-cost diagnosis (concurrency, complex test failures).
+  See: `skills/workflow/SKILL.md §Step 1 Setup` (--verifier-model), `§Model Selection`
+- **H2 — Auto-fix proposal**: When Layer 1 still fails after 3 retries, users may review an AI-proposed diff via a HARD-GATE-based single attempt. The same flow is added to `/refactor` for test regressions.
+  See: `skills/workflow/SKILL.md §Step 5 Verify Phase`, `§Architecture Principles`
+- **Release hardening** (post-review): `## Architecture Principles` section, `## Path Validator` single-source path validation (applies to `--output-dir`, `{failing_files_list}`, unified diff, Safety Guard), Auto-fix State Transition Table with invariants I1–I4 (once-only, retry clamp, session-resume entry point), `/workflow` ↔ `/refactor` schema parity (`verify.autofix_attempted` nested, reader-union backward compat), 2nd HARD-GATE UX unified across skills.
+  See: `skills/workflow/SKILL.md §Architecture Principles`, `§Path Validator`, `§State Machine`
+- **L2 — ROADMAP**: This file. Transparent planning and decision log.
+- **L3 — `--output-dir` flag**: Supports monorepo/CI scenarios requiring artifacts outside the default `docs/harness/`. Path validation rules live in the Path Validator single source.
+  See: `skills/workflow/SKILL.md §Step 1 Setup` (--output-dir), `§Architecture Principles §Path Validator`
+- **M2 — `.github/` templates**: `bug_report.yml`, `feature_request.yml`, `question.yml` issue templates + `PULL_REQUEST_TEMPLATE.md` to lower contribution barrier.
+- **M2 — Marketplace description**: `plugin.json` and `marketplace.json` descriptions updated with value-proposition language and "multi-agent" keywords.
+- **M1 (partial) — README text demo**: "At a Glance" section with before/after examples, terminal output sample, token cost table expansion.
+
+---
+
 **v8.0.0** — Thin Orchestrator + 3-Layer Quality Gates
 
 - Thin Orchestrator: state-machine orchestrator that passes paths only to sub-agents (no accumulation), 1-line return parsing, 40–60% token savings vs fat orchestrator
 - 3-layer quality gates: Layer 1 mechanical (build/test/lint/type-check/TODO scan), Layer 2 structural (criterion mapping, scope validation), Layer 3 LLM judgment (bias-reduced, context-isolated)
 - `state.json v2.0`: interrupt-safe session recovery, round-based retry loop, run-style (auto/phase/step)
 - Convention scanner sub-agent, multi-mode planner (single/standard/multi), phase-mode execution
-
----
-
-## v8.1 — In Progress (current)
-
-Features being implemented in this release cycle:
-
-- **H1 — Verifier model flexibility**: Layer 1 Mechanical Verification primarily runs commands and parses exit codes, so haiku is sufficient by default. An opt-in override is provided for high-cost diagnosis (concurrency, complex test failures).
-  See: `skills/workflow/SKILL.md §Step 1 Setup` (--verifier-model), `§Model Selection`
-- **H2 — Auto-fix proposal**: When Layer 1 still fails after 3 retries, users may review an AI-proposed diff via a HARD-GATE-based single attempt. The same flow is added to `/refactor` for test regressions.
-  See: `skills/workflow/SKILL.md §Step 5 Verify Phase`, `§Architecture Principles`
-- **L2 — ROADMAP**: This file. Transparent planning and decision log.
-- **L3 — `--output-dir` flag**: Supports monorepo/CI scenarios requiring artifacts outside the default `docs/harness/`. Path validation rules live in the Path Validator single source.
-  See: `skills/workflow/SKILL.md §Step 1 Setup` (--output-dir), `§Architecture Principles §Path Validator`
-- **M2 (partial) — `.github/` templates**: `bug_report.yml`, `feature_request.yml`, `question.yml` issue templates + `PULL_REQUEST_TEMPLATE.md` to lower contribution barrier.
-- **M2 (partial) — Marketplace description**: `plugin.json` and `marketplace.json` descriptions updated with value-proposition language and "multi-agent" keywords.
-- **M1 (partial) — README text demo**: "At a Glance" section with before/after examples, terminal output sample, token cost table expansion.
 
 ---
 

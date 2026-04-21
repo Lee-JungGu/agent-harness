@@ -1025,7 +1025,7 @@ A standalone utility skill that optimizes your project's CLAUDE.md and markdown 
 
 See [ROADMAP.md](ROADMAP.md) for the full roadmap with rationale.
 
-- **v8.1** (In Progress): Verifier model flexibility (`--verifier-model`), Auto-fix proposal for Layer 1 failures, `--output-dir` flag, `.github/` contribution templates
+- **v8.1** (Shipped): Path Validator single source, Auto-fix State Transition Table (invariants I1–I4), `--verifier-model` flexibility, `--output-dir` flag, Auto-fix proposal for Layer 1 failures (both `/workflow` and `/refactor`), `.github/` contribution templates
 - **v8.2+**: Custom persona override (`templates/user-override/`), GIF demo, external CLI wrapper
 
 ---
