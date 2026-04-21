@@ -1,0 +1,44 @@
+name: Feature Request
+description: Suggest a new feature or improvement for agent-harness
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem / motivation
+      description: What problem does this feature solve? What is the current limitation?
+      placeholder: "When I run /workflow on X, I find myself wanting Y because..."
+    validations:
+      required: true
+
+  - type: textarea
+    id: solution
+    attributes:
+      label: Proposed solution
+      description: What would you like to see? Be as specific as possible.
+    validations:
+      required: true
+
+  - type: input
+    id: skill
+    attributes:
+      label: Affected skill(s)
+      placeholder: "e.g. /workflow, /refactor, all skills"
+    validations:
+      required: false
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Have you tried workarounds? Any alternative approaches?
+    validations:
+      required: false
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional context
+      description: Links, screenshots, related issues, or any other relevant context.
+    validations:
+      required: false

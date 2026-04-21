@@ -1,0 +1,28 @@
+name: Question
+description: Ask a question about how to use agent-harness
+labels: ["question"]
+body:
+  - type: textarea
+    id: question
+    attributes:
+      label: Your question
+      description: What would you like to know?
+      placeholder: "How do I...? What is the difference between...?"
+    validations:
+      required: true
+
+  - type: input
+    id: skill
+    attributes:
+      label: Skill (if relevant)
+      placeholder: "e.g. /workflow, /refactor"
+    validations:
+      required: false
+
+  - type: textarea
+    id: tried
+    attributes:
+      label: What have you tried?
+      description: Share what you have already attempted or read, to avoid duplicate answers.
+    validations:
+      required: false
