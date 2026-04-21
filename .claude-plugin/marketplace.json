@@ -5,8 +5,8 @@
     "email": ""
   },
   "metadata": {
-    "description": "3-Phase development workflow, safe refactoring, staged migration, hypothesis-driven debugging, team knowledge base, automated test generation, requirements specification, and markdown optimization for Claude Code — no dependencies required",
-    "version": "8.0.0"
+    "description": "Multi-agent workflow harness with 3-layer quality gates (mechanical + structural + LLM review). Thin orchestrator enforces Plan → Generate → Verify → Evaluate phases with model-tiered sub-agents. For teams that want reviewable AI automation without custom infrastructure — no dependencies required.",
+    "version": "8.1.0"
   },
   "plugins": [
     {
@@ -15,8 +15,8 @@
         "source": "github",
         "repo": "Jugger0716/agent-harness"
       },
-      "description": "3-Phase development workflow with thin orchestrator + 3-layer quality gates, safe refactoring, staged migration, hypothesis-driven debugging, team knowledge base, automated test generation, code review, and markdown optimization for Claude Code",
-      "version": "8.0.0",
+      "description": "Multi-agent workflow harness with 3-layer quality gates (mechanical + structural + LLM review). Thin orchestrator enforces Plan → Generate → Verify → Evaluate phases with model-tiered sub-agents. Includes safe refactoring, staged migration, hypothesis-driven debugging, automated test generation, team knowledge base, and code review for Claude Code. For teams that want reviewable AI automation without custom infrastructure.",
+      "version": "8.1.0",
       "author": {
         "name": "Jugger"
       },
