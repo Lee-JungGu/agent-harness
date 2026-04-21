@@ -21,6 +21,8 @@ When a sub-agent returns:
 3. Use the first line as the progress message shown to the user
 4. **Ignore all remaining text** — do not analyze, reference, or include it in subsequent prompts
 
+**1-line return parse failure**: If the return value does not match the expected format (`<keyword> — <summary>`), treat as `confidence: Unknown` and print `[harness] ⚠ 1-line return parse failed — fallback: confidence Unknown`. For Auto-fix Proposer specifically, the expected fallback format is: `auto_fix_patch written — confidence: Unknown — <reason>`.
+
 ## Version & Compatibility
 
 This is **state.json v2** (version `"2.0"`). When loading an existing state.json:
@@ -124,12 +126,22 @@ Before starting a new task, check if `.harness/state.json` exists:
      - "Stop" / "Delete .harness/ and halt"
 
    Actions:
-   - **Resume**: Jump to the state matching `phase`:
+   - **Resume**: Before jumping to any step, run Safety Guard re-validation:
+     - Read `docs_path` directly from state.json. **Do NOT recompute from `cli_flags.output_dir`** — `cli_flags` is for audit/record only.
+     - Run `validate_path(docs_path, kind=output_dir)`: slug validation + relative path + reserved name check.
+     - If validation fails: print `[harness] ⚠ Recovered docs_path failed validation: <path>` and treat as Restart.
+
+     Then jump to the state matching `phase`:
      - `plan_ready` → Step 1.5 (Convention Scan) if `conventions` is `null` (not yet executed), else Step 2 (Plan). Note: `"skipped"` means user already decided — go to Step 2. If `conventions` starts with `"file:"` but the file does not exist, treat as `null` and re-run Step 1.5.
      - `planning` / `plan_done` → Step 3 (Gate) if spec.md exists, else Step 2
      - `generate_ready` → Step 4 (Generate)
      - `generating` / `generate_done` → Step 5 (Verify)
-     - `verify_ready` / `verifying` / `verify_done` → Step 5 (Verify), reset retries to 0
+     - `verify_ready` / `verifying` → Step 5 (Verify), reset retries to 0
+     - `verify_done`:
+       - if `state.autofix == null` → Step 5 (Verify), reset `layer1_retries` to 0 (existing behavior)
+       - if `autofix.applied == "proposed"` → Step 5 "2nd HARD-GATE" direct re-entry (I3; do NOT reset retries)
+       - if `autofix.applied == "applied"` → Step 5 re-verify from Layer 1 (retries from state.json, no reset)
+       - if `autofix.applied` is `"stopped"` or `"rejected"` → Step 5 "1st HARD-GATE" (Auto-fix HIDE per I2; `layer1_retries` unchanged — I4 clamp applies to "stopped")
      - `evaluate_ready` → Step 6 (Evaluate)
      - `evaluating` / `evaluate_done` → Step 7 (Verdict)
      - `completed` → no active session, proceed to Step 1
@@ -196,6 +208,33 @@ Retry loops:
 - `*_done` → next `*_ready`: auto mode = automatic / phase mode = next session
 - Phase mode can end session at: `plan_done`, `generate_done`, `verify_done`, `evaluate_done`
 
+### Auto-fix State Transition Table
+
+| `autofix.applied` | Meaning |
+|---|---|
+| `null` (idle) | Auto-fix not yet attempted |
+| `"proposed"` | Proposer dispatched, awaiting 2nd HARD-GATE |
+| `"applied"` | Patch applied, re-verification in progress |
+| `"rejected"` | User rejected proposal |
+| `"stopped"` | Patch applied but re-verification failed |
+
+**Transitions:**
+
+| From | Event | To |
+|---|---|---|
+| `null` (idle) | 1st HARD-GATE "Auto-fix" selected | `proposed` |
+| `proposed` | User "Apply patch" (2nd HARD-GATE) | `applied` |
+| `proposed` | User "Reject" (2nd HARD-GATE) | `rejected` |
+| `applied` | Re-verify PASS | (cleared — continues to Step 6) |
+| `applied` | Re-verify FAIL | `stopped` |
+
+**Invariants (I1–I4):**
+
+- **I1**: `verify.autofix_attempted == true ⟺ autofix != null ∧ autofix.applied ≠ "proposed"`
+- **I2**: 1st HARD-GATE Auto-fix option is visible only when `verify.autofix_attempted == false AND state.autofix == null`
+- **I3**: On session resume, if `autofix.applied == "proposed"` → re-enter 2nd HARD-GATE directly (skip 1st GATE)
+- **I4**: `autofix.applied == "stopped"` ⟹ `layer1_retries = min(layer1_retries, 3)` (clamp — no further increment)
+
 ---
 
 ## Workflow Steps
@@ -211,6 +250,14 @@ Retry loops:
    - `--model-config <preset>` → set model config
    - `--lint-cmd <cmd>` → override lint_cmd
    - `--type-check-cmd <cmd>` → override type_check_cmd
+   - `--verifier-model <haiku|sonnet|opus>` → override verifier model (default: haiku). **Validation**: if value is not one of `haiku`, `sonnet`, `opus` → halt with error: "Invalid --verifier-model value. Allowed: haiku, sonnet, opus."
+   - `--output-dir <path>` → override output base directory (default: `docs/harness`). **Validation** — apply `validate_path(path, kind=output_dir)` (see §Architecture Principles §Path Validator):
+     - **Step 0** (before normalization): Empty string → halt with error: "output-dir cannot be empty."
+     - **Step 1** Normalize: `\` → `/` (always, OS-independent). UNC pattern (`\\server\…` or `//server/…`) → halt with error: "UNC paths are not allowed."
+     - **Step 2** Absolute path: matches `^/` or `^[A-Za-z]:/` → halt with error: "output-dir must be a relative path."
+     - **Step 3** Segment `..`: `path.split("/")` — if any segment `== ".."` → halt with error: "output-dir must not contain '..'." (segment-exact check, not substring)
+     - **Step 4** Reserved first segment: `path.split("/")[0]` ∈ `{memory, spec, planner, generator, evaluator, verify, harness, .harness, docs}` → halt with error: "output-dir value starts with a reserved directory name." (first segment only — trailing slash stripped first; full-path comparison is NOT performed)
+     - If valid: normalize with trailing slash stripped, store in `cli_flags.output_dir`.
 3. **Slugify the task:** lowercase, transliterate non-ASCII to ASCII, remove non-word chars except hyphens, replace spaces with hyphens, truncate to 50 chars. Store as `<slug>`.
 4. **Auto-detect project language and commands.** Scan the working directory:
 
@@ -250,7 +297,20 @@ Retry loops:
 
    If none match → `null` (SKIPPED during verify).
 
-7. **Create directories:** `.harness/`, `.harness/planner/`, `.harness/generator/`, `docs/harness/<slug>/`
+7. **Determine `docs_path`:**
+   ```
+   output_base = cli_flags.output_dir ?? "docs/harness"
+   docs_path = output_base + "/" + <slug> + "/"
+   ```
+   **Create directories:** `.harness/`, `.harness/planner/`, `.harness/generator/`, `{docs_path}`
+
+   **Immediately after docs_path is determined**, write partial state.json (crash recovery checkpoint):
+   ```json
+   { "version": "2.0", "task": "<task>", "cli_flags": {...}, "user_lang": "<lang>",
+     "has_git": <bool>, "created_at": "<ISO8601>", "docs_path": "<docs_path>", "slug": "<slug>" }
+   ```
+   Remaining fields (mode, model_config, etc.) are `null` until Step 1.11 final write.
+
 8. **Create git branch (if has_git):** `git checkout -b harness/<slug>`. Skip if `has_git == false`.
 9. **Mode selection:** If `--mode` provided, use it. Otherwise, ask via AskUserQuestion (in `user_lang`):
    - header: "Mode"
@@ -271,8 +331,20 @@ Retry loops:
 
     If "Other": parse `executor:<model>,advisor:<model>,evaluator:<model>`. Validate — only `opus`, `sonnet`, `haiku`. Max 3 retries, then default to `balanced`. Fill missing roles from `balanced` defaults.
 
-    Store as `model_config`: `{ "preset": "<name>", "executor": "<model|null>", "advisor": "<model|null>", "evaluator": "<model|null>", "verifier": "haiku" }`.
-    For `default` preset: `{ "preset": "default", "verifier": "haiku" }`.
+    Store as `model_config`: `{ "preset": "<name>", "executor": "<model|null>", "advisor": "<model|null>", "evaluator": "<model|null>", "verifier": "<resolved-verifier>" }`.
+    For `default` preset: `{ "preset": "default", "verifier": "<resolved-verifier>" }`.
+
+10.5. **Verifier model determination:** `model_config.verifier = cli_flags.verifier_model ?? "haiku"` (CLI flag takes priority; preset default is always `haiku`). Store resolved value in `model_config.verifier`.
+
+    **Backward compat (Session Recovery):** When resuming a v2.0 session that lacks `cli_flags`, `verify.autofix_attempted`, `autofix`, or `docs_path`, resolve missing fields to defaults in memory without writing back to state.json:
+    - `cli_flags` → `{ "verifier_model": null, "output_dir": null }`
+    - `model_config.verifier` (missing) → `"haiku"`
+    - `verify.autofix_attempted` (missing) → `false`
+    - `autofix` (missing) → `null`
+    - `docs_path` (missing) → `"docs/harness/<slug>/"` (reconstruct from `task` slug)
+    This ensures `state.get(field, default)` pattern — KeyError-free resume for all pre-v8.1 sessions.
+
+    **docs_path usage rule**: Always read `docs_path` directly from state.json. Do NOT recompute from `cli_flags.output_dir`. `cli_flags` is for audit/record purposes only. Safety Guard in Session Recovery also uses `docs_path` directly (not recomputed).
 
 11. **Write `.harness/state.json`:**
 
@@ -287,7 +359,11 @@ Retry loops:
     "executor": "<model|null>",
     "advisor": "<model|null>",
     "evaluator": "<model|null>",
-    "verifier": "haiku"
+    "verifier": "<haiku|sonnet|opus>"
+  },
+  "cli_flags": {
+    "verifier_model": null,
+    "output_dir": null
   },
   "user_lang": "<lang>",
   "has_git": true,
@@ -309,14 +385,20 @@ Retry loops:
     "layer1_retries": 0,
     "layer2_result": null,
     "layer2_retries": 0,
-    "todo_blocking": false
+    "todo_blocking": false,
+    "autofix_attempted": false
   },
-  "docs_path": "docs/harness/<slug>/",
+  "autofix": null,
+  "docs_path": "<output_base>/<slug>/",
   "conventions": null,
   "created_at": "<ISO8601>",
   "updated_at": "<ISO8601>"
 }
 ```
+
+> `cli_flags.verifier_model` and `cli_flags.output_dir` are `null` by default (no CLI override).
+> `verify.autofix_attempted` starts `false` each new session (session-wide once-only limit — not reset on round increment).
+> `autofix` starts `null`; transitions to `{ "last_patch_path": "...", "applied": "proposed"|"applied"|"rejected"|"stopped", "triggered_at": "<ISO8601>" }` during H2 flow.
 
 12. **Print setup summary** (in `user_lang`):
 ```
@@ -325,6 +407,7 @@ Retry loops:
   Branch    : harness/<slug>     ← omit if has_git == false
   Mode      : <single | standard | multi>
   Model     : <preset>
+  Verifier  : <model_config.verifier>    ← always shown
   Style     : <auto | phase | step>
   Language  : <lang>
   Test      : <test_cmd or "none">
@@ -332,6 +415,12 @@ Retry loops:
   Lint      : <lint_cmd or "none">
   TypeCheck : <type_check_cmd or "none">
   Scope     : <scope>
+  Output    : <docs_path>
+```
+
+If `model_config.verifier` is `sonnet` or `opus`, also print:
+```
+  ⚠ Verifier set to <model> — high cost for mechanical verification. haiku is usually sufficient.
 ```
 
 13. **Proceed to Step 1.5** (Convention Scan). If `run_style == "step"` and the CLI step is not `plan`, check prerequisites and jump to the requested step after Step 1.5 completes.
@@ -404,7 +493,7 @@ Print: `[harness] Phase: Plan`
 
 1. Update phase → `"planning"`.
 2. Read template: `{CLAUDE_PLUGIN_ROOT}/templates/planner/planner_single.md`
-3. **Dispatch 1 sub-agent** with prompt built from template variables: `{task_description}`, `{repo_path}`, `{lang}`, `{scope}`, `{user_lang}`, `{spec_path}` = `docs/harness/<slug>/spec.md`.
+3. **Dispatch 1 sub-agent** with prompt built from template variables: `{task_description}`, `{repo_path}`, `{lang}`, `{scope}`, `{user_lang}`, `{spec_path}` = `{docs_path}spec.md`.
    - **Conventions injection:** If `conventions` in state.json starts with `"file:"`, extract the path after the prefix, read the file content, and pass as `{conventions}`. If `conventions` is `null`, `"skipped"`, or the referenced file does not exist, pass `{conventions}` as empty string.
    - Model: if preset ≠ "default", use `model_config.advisor`.
 4. Parse return → extract first line. Print: `  ✓ {first line}`
@@ -504,8 +593,8 @@ Print: `  Dispatching generator sub-agent...`
 
 1. Update phase → `"generating"`, `updated_at → now`.
 2. Read template: `generator_single.md`
-3. Prepare prompt: `{spec_content}` from spec.md, `{qa_feedback}` from qa_report.md if round > 1 else "(First round)", `{round_num}`, `{scope}`, `{max_files}`, `{user_lang}`, `{changes_path}` = `docs/harness/<slug>/changes.md`.
-   - **If retry** (from verify/evaluate failure): add `{verify_failure}` = 1-line FAIL summary, `{verify_report_path}` = `docs/harness/<slug>/verify_report.md`.
+3. Prepare prompt: `{spec_content}` from spec.md, `{qa_feedback}` from qa_report.md if round > 1 else "(First round)", `{round_num}`, `{scope}`, `{max_files}`, `{user_lang}`, `{changes_path}` = `{docs_path}changes.md`.
+   - **If retry** (from verify/evaluate failure): add `{verify_failure}` = 1-line FAIL summary, `{verify_report_path}` = `{docs_path}verify_report.md`.
    - Model: if preset ≠ "default", use `model_config.executor`.
 4. **Dispatch 1 sub-agent.**
 5. Parse return. Print: `  ✓ {first line}`
@@ -536,12 +625,12 @@ Print: `  Dispatching generator sub-agent...`
 
 1. Read template: `implementation_standard.md`
 2. Read plan + review from `.harness/generator/`.
-3. Prepare prompt: `{spec_content}`, `{plan_content}`, `{advisor_review}`, `{qa_feedback}`, `{repo_path}`, `{lang}`, `{scope}`, `{max_files}`, `{user_lang}`, `{round_num}`, `{changes_path}`.
-   - **If retry**: add `{verify_failure}`, `{verify_report_path}`.
+3. Prepare prompt: `{spec_content}`, `{plan_content}`, `{advisor_review}`, `{qa_feedback}`, `{repo_path}`, `{lang}`, `{scope}`, `{max_files}`, `{user_lang}`, `{round_num}`, `{changes_path}` = `{docs_path}changes.md`.
+   - **If retry**: add `{verify_failure}`, `{verify_report_path}` = `{docs_path}verify_report.md`.
    - Model: if preset ≠ "default", use `model_config.executor`.
 4. **Dispatch 1 sub-agent.**
 5. Parse return. Print: `  ✓ Code: {first line}`
-6. Verify `changes.md` exists.
+6. Verify `{docs_path}changes.md` exists.
 7. Update phase → `"generate_done"`, `updated_at → now`.
 
 #### Step 4 — multi mode
@@ -563,12 +652,12 @@ Same as standard 4a.
 
 1. Read template: `implementation.md`
 2. Read plan + both reviews from `.harness/generator/`.
-3. Prepare prompt: `{spec_content}`, `{plan_content}`, `{code_quality_review}`, `{test_stability_review}`, `{qa_feedback}`, `{repo_path}`, `{lang}`, `{scope}`, `{max_files}`, `{user_lang}`, `{round_num}`, `{changes_path}`.
-   - **If retry**: add `{verify_failure}`, `{verify_report_path}`.
+3. Prepare prompt: `{spec_content}`, `{plan_content}`, `{code_quality_review}`, `{test_stability_review}`, `{qa_feedback}`, `{repo_path}`, `{lang}`, `{scope}`, `{max_files}`, `{user_lang}`, `{round_num}`, `{changes_path}` = `{docs_path}changes.md`.
+   - **If retry**: add `{verify_failure}`, `{verify_report_path}` = `{docs_path}verify_report.md`.
    - Model: if preset ≠ "default", use `model_config.executor`.
 4. **Dispatch 1 sub-agent.**
 5. Parse return. Print: `  ✓ Code: {first line}`
-6. Verify `changes.md` exists.
+6. Verify `{docs_path}changes.md` exists.
 7. Update phase → `"generate_done"`, `updated_at → now`.
 
 #### After Generate Phase
@@ -595,11 +684,11 @@ Print: `[harness] Phase: Verify (Layer 1 — Mechanical)`
    - `{test_cmd}`: from state.json (or `"SKIP"` if null)
    - `{lint_cmd}`: from state.json (or `"SKIP"` if null)
    - `{type_check_cmd}`: from state.json (or `"SKIP"` if null)
-   - `{changes_md_path}`: `docs/harness/<slug>/changes.md`
-   - `{verify_report_path}`: `docs/harness/<slug>/verify_report.md`
+   - `{changes_md_path}`: `{docs_path}changes.md`
+   - `{verify_report_path}`: `{docs_path}verify_report.md`
    - `{todo_blocking}`: from state.json `verify.todo_blocking`
 3. Update phase → `"verifying"`, `updated_at → now`.
-4. **Dispatch Verify sub-agent** with `model: "haiku"` (always haiku, all presets).
+4. **Dispatch Verify sub-agent** with `model: model_config.verifier` (default: haiku; override via --verifier-model).
 5. Parse return — first line:
    - Contains `"PASS"` → `verify.layer1_result → "PASS"`
    - Contains `"FAIL"` → `verify.layer1_result → "FAIL"`
@@ -631,7 +720,7 @@ Print:
 
 Add to prompt:
 - `{verify_failure}` = the 1-line FAIL summary
-- `{verify_report_path}` = `docs/harness/<slug>/verify_report.md`
+- `{verify_report_path}` = `{docs_path}verify_report.md`
 - Model: if preset ≠ "default", use `model_config.executor`.
 
 Update phase → `"generating"`, `updated_at → now` (skip `generate_ready` — retry is automatic, no user gate).
@@ -643,18 +732,77 @@ Print:
 ```
 [harness] Verify (Layer 1) FAIL — max retries reached (3/3)
   Latest error: {first line error summary}
-  See: docs/harness/<slug>/verify_report.md
+  See: {docs_path}verify_report.md
 ```
 
+<HARD-GATE>
 Ask via AskUserQuestion (in `user_lang`):
 - header: "Verify"
 - question: "Mechanical verification failed after 3 attempts. [error summary]"
 - options:
+  - "Auto-fix proposal" / "Let AI (Opus) analyze the failure and propose a minimal diff (1 attempt only)" ← **HIDE this option if `verify.autofix_attempted == true OR state.autofix != null`** (see §State Machine — I2)
   - "Continue to Evaluator" / "Skip remaining verify issues, proceed to QA"
   - "Stop" / "Halt for manual intervention. Review verify_report.md"
+</HARD-GATE>
 
 If "Continue": proceed to Step 6.
 If "Stop": halt (keep phase as `verify_done`).
+
+**If "Auto-fix proposal":**
+
+> `verify.autofix_attempted` is set to `true` only after the 2nd HARD-GATE decision (Apply/Reject/Stop), NOT at Proposer dispatch. This ensures session interruption between dispatch and the 2nd gate does not consume the once-only right (I1).
+> **On session resume with `autofix.applied == "proposed"`**: re-enter 2nd HARD-GATE directly using saved `autofix.last_patch_path` — skip 1st GATE (I3).
+
+1. Update state.json: `autofix → { "last_patch_path": ".harness/generator/auto_fix_patch.md", "applied": "proposed", "triggered_at": "<ISO8601>" }`
+2. Read template: `{CLAUDE_PLUGIN_ROOT}/templates/generator/auto_fix_proposer.md`
+3. Fill variables (pass **paths only** — Proposer sub-agent reads files directly):
+   - `{spec_path}` = `{docs_path}spec.md`
+   - `{changes_md_path}` = `{docs_path}changes.md`
+   - `{verify_report_path}` = `{docs_path}verify_report.md`
+   - `{failing_files_list}` = Orchestrator reads verify_report.md directly to extract file paths (explicit exception to §Architecture Principles #1 — path extraction only, no content analysis). After extraction:
+     - Apply `validate_path(path, kind=file_reference)` to each path.
+     - Violations: drop path + print `[harness] ⚠ Path validation failed: <path> — excluded from Proposer input`
+     - Cap: maximum 5 paths. Excess paths dropped silently.
+     - If 0 valid paths remain: print `[harness] ⚠ No valid file paths found — Proposer input will be empty`
+   - `{output_path}` = `.harness/generator/auto_fix_patch.md`
+4. **Dispatch Auto-fix Proposer sub-agent** with `model: model_config.advisor ?? "opus"`.
+   - If `model_config.preset == "default"`, use `"opus"` (explicit upgrade — 2nd GATE UI will warn cost).
+5. Parse return 1-line. Extract `confidence` level. If return format is non-standard (cannot parse confidence), treat as `confidence: Unknown` and print `[harness] ⚠ 1-line return parse failed — fallback: confidence Unknown`.
+6. Verify `.harness/generator/auto_fix_patch.md` exists.
+7. **Empty patch check**: verify `auto_fix_patch.md` contains at least one ```` ```diff ```` code block AND at least one `@@` hunk header.
+   - If absent: skip Apply, print `[harness] ⚠ Patch file is empty or has no diff block — apply skipped`, return to HARD-GATE (Auto-fix hidden).
+
+<HARD-GATE>
+Show confidence level + 1-line summary from patch file.
+Print before question: `[harness] ℹ Auto-fix model: {model_config.advisor ?? 'opus'}`
+Ask via AskUserQuestion (in `user_lang`):
+- header: "Auto-fix"
+- question: "Proposed fix generated (confidence: {level}). [If confidence == Low: ⚠ Low confidence — review the diff carefully before applying.] Apply the patch?"
+- options:
+  - "Apply patch" / "Apply the proposed diff and re-run Layer 1 verification (retry counter unchanged)"
+  - "Reject" / "Discard proposal, return to previous gate (Auto-fix option hidden)"
+  - "Stop" / "Halt for manual intervention"
+</HARD-GATE>
+
+After 2nd HARD-GATE decision, set `verify.autofix_attempted = true` in state.json.
+
+**If "Apply patch":**
+1. Before applying: snapshot current state via `git stash` (if `has_git == true`) or copy changed files to `.harness/autofix_pre_apply/` (if `has_git == false`).
+2. **Pre-apply path validation**: parse all `--- a/<path>` and `+++ b/<path>` headers from `auto_fix_patch.md` (metadata only — 4 header lines per hunk; hunk body is not parsed). Apply `validate_path(path, kind=diff_target)` to each path.
+   - Print to user: `[harness] Applying patch to: <path list>`
+   - If any path fails validation: reject Apply, print `[harness] ✗ Diff path validation failed: <path>`, return to HARD-GATE (Auto-fix hidden).
+3. Apply unified diff from `.harness/generator/auto_fix_patch.md` using Edit tool.
+   - If any hunk fails to apply: restore from snapshot, warn user "Apply failed — reverted to pre-apply state.", return to HARD-GATE (retries >= 3, Auto-fix hidden).
+4. Update state.json: `autofix.applied → "applied"`. Reset `verify.layer1_result → null`.
+5. Re-run Layer 1 Verify (retry counter `layer1_retries` unchanged — do NOT increment):
+   - **PASS** → proceed to Step 6.
+   - **FAIL** → update state.json: `autofix.applied → "stopped"`, `layer1_retries = min(layer1_retries, 3)` (clamp — see §State Machine I4). Return to FAIL retries >= 3 HARD-GATE (Auto-fix option hidden since `verify.autofix_attempted == true`).
+
+**If "Reject":**
+1. Update state.json: `autofix.applied → "rejected"`.
+2. Return to FAIL retries >= 3 HARD-GATE (Auto-fix option hidden).
+
+**Layer 2 FAIL path:** Auto-fix proposal does **NOT** apply to Layer 2 structural failures (Step 7). Mechanical diff cannot fix structural issues.
 
 #### After Verify Phase
 
@@ -677,10 +825,10 @@ Print: `  Dispatching evaluator sub-agent...`
    - `{spec_content}` from spec.md
    - `{changed_files_list}` — file paths only from changes.md, **strip all "reason" descriptions** (anchoring prevention)
    - `{test_available}`, `{build_cmd}`, `{test_cmd}`, `{round_num}`, `{scope}`, `{user_lang}`
-   - `{qa_report_path}` = `docs/harness/<slug>/qa_report.md`
+   - `{qa_report_path}` = `{docs_path}qa_report.md`
    - `{verify_context}`:
-     - If `verify.layer1_result == "PASS"`: `"Layer 1 PASSED — build/test/lint/type-check verified. See docs/harness/<slug>/verify_report.md"`
-     - If `verify.layer1_result == "FAIL"` (user chose Continue): `"Layer 1 FAILED (user proceeded despite failures) — see docs/harness/<slug>/verify_report.md. Pay extra attention to build/test correctness."`
+     - If `verify.layer1_result == "PASS"`: `"Layer 1 PASSED — build/test/lint/type-check verified. See {docs_path}verify_report.md"`
+     - If `verify.layer1_result == "FAIL"` (user chose Continue): `"Layer 1 FAILED (user proceeded despite failures) — see {docs_path}verify_report.md. Pay extra attention to build/test correctness."`
      - If verify skipped: `"Layer 1 was not executed for this session."`
    - **Do NOT include:** Generator reasoning, implementation plans, advisor reviews, or references to "Generator"/"AI"/"agent".
 3. Update phase → `"evaluating"`, `updated_at → now`.
@@ -728,7 +876,7 @@ Launch **one implementation sub-agent** (retry, no re-plan/re-review) — same r
 - `standard` → `implementation_standard.md` (with existing plan.md + review_combined.md)
 - `multi` → `implementation.md` (with existing plan.md + reviews)
 
-Add `{verify_failure}` = evaluator 1-line FAIL, `{verify_report_path}` = qa_report.md path.
+Add `{verify_failure}` = evaluator 1-line FAIL, `{verify_report_path}` = `{docs_path}qa_report.md`.
 Model: if preset ≠ "default", use `model_config.executor`.
 
 Update phase → `"generating"`, `updated_at → now` (skip `generate_ready`).
@@ -782,16 +930,17 @@ Proceed to Step 8.
 
 #### Artifact Cleanup Safety Guard
 
-Before deleting any `docs/harness/` subdirectory:
+Before deleting any output directory:
 
-1. **Validate slug**: Read `docs_path` from state.json, extract `<slug>`. If empty/null/whitespace → **ABORT**, warn user.
-2. **Path depth check**: Must match `docs/harness/<non-empty-slug>/`. slug must NOT be `memory`, must NOT contain `..` or `/`, must NOT be `.`. If any fail → **ABORT**.
-3. **Display before delete**: Print exact target path before executing.
+1. **Read `docs_path`** from state.json. If missing/null: reconstruct as `"docs/harness/<slug>/"`. Extract `<slug>` = last path segment before the trailing `/`.
+2. **Validate slug**: If empty/null/whitespace → **ABORT**, warn user.
+3. **Path depth check**: `docs_path` must be a relative path exactly one level below its parent directory. slug must NOT be `memory` (reserved), must NOT contain `..` or `/`, must NOT be `.`. **Always** verify: `Path(docs_path).resolve()` ⊆ `Path.cwd()` (symlink escape prevention — no `has_git` condition). If any fail → **ABORT**.
+4. **Display before delete**: Print exact target path before executing.
 
-**Full `docs/harness/` cleanup** (only on explicit user request):
+**Full output base cleanup** (only on explicit user request):
 1. List all subdirectories with file counts.
 2. If `docs/harness/memory/` exists, warn separately: "Contains team knowledge from /memory skill."
-3. Warn: "docs/ is git-ignored — all artifacts permanently deleted."
+3. Warn: "`docs/` is git-ignored — all artifacts permanently deleted."
 4. Confirm via AskUserQuestion (yes/no).
 
 #### If has_git == true:
@@ -805,13 +954,13 @@ Ask via AskUserQuestion (in `user_lang`):
   - "No commit" / "Clean .harness/ only, keep changes in working tree"
 
 Actions (apply Safety Guard before each delete):
-- "Commit code only": delete `.harness/`, delete `docs/harness/<slug>/`, stage + commit code
-- "Commit all": delete `.harness/`, stage + commit `docs/harness/<slug>/` + code
+- "Commit code only": delete `.harness/`, delete `{docs_path}`, stage + commit code
+- "Commit all": delete `.harness/`, stage + commit `{docs_path}` + code
 - "No commit": delete `.harness/` only
 
 #### If has_git == false:
 
-Inform user artifacts are in `docs/harness/<slug>/`.
+Inform user artifacts are in `{docs_path}`.
 Delete `.harness/` only. No git operations.
 
 ---
@@ -820,10 +969,10 @@ Delete `.harness/` only. No git operations.
 
 | Preset | executor | advisor | evaluator | verifier |
 |--------|----------|---------|-----------|----------|
-| default | (parent) | (parent) | (parent) | haiku |
-| all-opus | opus | opus | opus | haiku |
-| balanced | sonnet | opus | opus | haiku |
-| economy | haiku | sonnet | sonnet | haiku |
+| default | (parent) | (parent) | (parent) | haiku (default) |
+| all-opus | opus | opus | opus | haiku (default) |
+| balanced | sonnet | opus | opus | haiku (default) |
+| economy | haiku | sonnet | sonnet | haiku (default) |
 
 ### Planner Phase Sub-agents
 
@@ -853,9 +1002,9 @@ Delete `.harness/` only. No git operations.
 
 | Sub-agent | Role | default | all-opus | balanced | economy |
 |-----------|------|---------|----------|----------|---------|
-| Verify (Layer 1) | verifier | haiku | haiku | haiku | haiku |
+| Verify (Layer 1) | verifier | haiku (default) | haiku (default) | haiku (default) | haiku (default) |
 
-> **All presets use haiku for verifier.** Layer 1 only executes commands and parses exit codes — lowest-cost model is always sufficient.
+> **Verifier defaults to haiku across all presets.** Layer 1 only executes commands and parses exit codes — lowest-cost model is always sufficient. Override with `--verifier-model sonnet|opus` for sensitive mechanical verification (e.g., concurrency, complex test failures). Opt-in only. When set to `sonnet` or `opus`, a cost warning is shown in Setup Summary.
 
 **Applying model config:** When launching any sub-agent, if `model_config.preset` ≠ `"default"`, pass `model` per the table. Sub-agents do NOT read model_config from state.json — the orchestrator passes the model at launch.
 
@@ -868,6 +1017,65 @@ All user-facing questions MUST use AskUserQuestion tool when available.
 - "Other" (free text) is automatically appended
 - Translate all text to `user_lang`
 
+## Architecture Principles
+
+The following 5 principles are invariant constraints for the harness Orchestrator.
+
+1. **Orchestrator reads no intermediate files.** Exceptions:
+   - spec.md at plan gate
+   - qa_report.md at verdict gate
+   - verify_report.md path for user message
+   - **verify_report.md failing-file extraction for Auto-fix Proposer dispatch**:
+     Orchestrator reads verify_report.md to extract failing file paths only (no content analysis).
+     Extracted paths pass through Path Validator (kind=file_reference) and are capped at 5.
+     See §Step 5 — Auto-fix dispatch for the exact procedure.
+   - Apply-before `--- a/` / `+++ b/` diff header lines (4 lines of metadata only — hunk body is delegated to Edit tool). This is NOT a violation of this principle.
+
+2. **Auto-fix Proposer is the only sub-agent that directly Reads source files.** Other sub-agents receive content only through template variables.
+
+3. **Paths only to sub-agents; never file contents** (ephemeral critiques/proposals at synthesis step excepted).
+
+4. **Session-wide invariants** (see §State Machine — Auto-fix State Transition Table):
+   - Auto-fix: at most 1 attempt per session (`verify.autofix_attempted` once-only — not reset on round increment).
+   - Layer 1 retries: max 3. Do NOT reset after Auto-fix Apply.
+
+5. **All external paths pass through Path Validator before use** (see §Path Validator below).
+
+### Path Validator
+
+Orchestrator internal conceptual function. Call sites: `--output-dir` parsing (Step 1.2), `{failing_files_list}` injection (Step 5), Edit tool unified diff Apply (Step 5), Session Recovery re-validation (Session Recovery).
+
+```
+validate_path(path, kind) where kind ∈ {output_dir, file_reference, diff_target}
+
+  0. (kind == output_dir only) Empty string → halt "output-dir cannot be empty."
+  1. Normalize: \ → / (OS-independent). UNC (\\server\share or //server/share) → halt.
+  2. Absolute path: ^/ or ^[A-Za-z]:/ → halt.
+  3. Segment-level ..: path.split("/") — any segment == ".." → halt (exact segment match, not substring).
+  4. kind-specific:
+     - output_dir:
+         First segment (path.split("/")[0]) ∉ {memory, spec, planner, generator,
+         evaluator, verify, harness, .harness, docs}.
+     - file_reference (failing_files_list):
+         (a) relative path, (b) no .. segment, (c) inside repo_path,
+         (d) outside .harness/, docs/harness/*, memory/.
+     - diff_target (unified diff --- a/ / +++ b/ headers):
+         file_reference conditions + inside scope filter +
+         outside .harness/, docs/harness/, memory/, .git/.
+  5. On failure: return specific halt message describing the violation.
+```
+
+**Attack vector → Path Validator step mapping:**
+
+| Attack vector | Blocked at step |
+|---|---|
+| `--output-dir .harness` | Step 4 (kind=output_dir, first segment reserved) |
+| `--output-dir docs/../../etc` | Step 3 (segment `..` rejection) |
+| `--output-dir \\server\share` | Step 1 (normalization + UNC rejection) |
+| `--output-dir /absolute/path` | Step 2 (absolute path rejection) |
+| `--output-dir memory/foo` | Step 4 (first segment reserved) |
+| `--output-dir ` (empty) | Step 0 (empty string, kind=output_dir) |
+
 ## Key Rules
 
 - **Never skip phases.** Always Plan → Generate → Verify → Evaluate.
@@ -879,5 +1087,5 @@ All user-facing questions MUST use AskUserQuestion tool when available.
 - **Use available skills.** Search by keyword, not plugin name. Proceed without if none found.
 - **User language.** All user-facing output in `user_lang`.
 - **Intermediate outputs are ephemeral.** Only final artifacts preserved in `docs/`.
-- **Orchestrator reads no intermediate files.** Exception: spec.md at user gate, qa_report.md at verdict gate, verify_report.md path for user message.
+- **Orchestrator reads no intermediate files.** See §Architecture Principles for full exception list.
 - **1-line return parsing.** Only first line of sub-agent return is used for state decisions.
