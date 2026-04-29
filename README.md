@@ -77,6 +77,7 @@ Higher modes cost more per run but save total cost by reducing retry rounds. Sta
 | **Code Review** | `/code-review <target>` | Systematic, bias-free code review. Quick (1 agent), deep (2 specialists), or thorough (3 specialists + cross-verification). |
 | **MD Optimize** | `/md-optimize` | Optimize CLAUDE.md and project `.md` files for token efficiency. |
 | **MD Generate** | `/md-generate` | Analyze project and generate/enhance CLAUDE.md for effective Claude Code development. |
+| **Ship** | `/ship` | Q&A release pipeline: version bump, CHANGELOG (Conventional Commits), build/test verify, git ops (commit/tag/push), GitHub release — HARD-GATE before every irreversible action. Auto-detects environment, skips unavailable stages. |
 
 ## Install
 
@@ -1018,6 +1019,76 @@ A standalone utility skill that optimizes your project's CLAUDE.md and markdown 
 - **Smart Routing**: Detects project state and suggests `/md-generate` when CLAUDE.md is missing or thin
 
 **Safety features**: Git-based rollback, HARD GATE confirmation before any changes, YAML frontmatter preservation, idempotency markers for safe re-runs.
+
+---
+
+## ship
+
+A Q&A-driven release pipeline orchestrator. Guides version bump, changelog generation, build/test verification, code review summary, git operations, and GitHub release through HARD-GATEs before every irreversible action.
+
+```
+/ship                              # interactive Q&A: detect environment, select stages, run pipeline
+```
+
+**What it does:**
+- **6-stage pipeline (auto-detected, skips unavailable)**: `version_bump` → `changelog` → `build_verify` → `code_review` → `git_ops` → `gh_release`
+- **Q&A driven**: detects environment (git, `gh` CLI, `gh auth`, package manifest), asks user for current/release version, selected stages, and confirmations
+- **Conventional Commits classification**: parses git log since last tag, categorizes by `feat:` / `fix:` / `docs:` / `chore:` / `BREAKING CHANGE`
+- **CHANGELOG ↔ release-notes integration**: writes Keep a Changelog format; later extracts the version section verbatim into GitHub release notes
+- **HARD-GATE before every irreversible action**: version bump confirm, changelog edit gate, commit gate, branch push gate, tag push gate, GitHub release create gate
+- **Session recovery with substep tracking**: resumes at the exact substep (e.g., after `git_branch_pushed` skips branch-push, retries tag-push)
+
+### Stages
+
+| # | Stage | What it does | HARD-GATE |
+|---|-------|-------------|-----------|
+| 2 | **version_bump** | Pass 1 detects version refs across package manifests + source constants; Pass 2 applies after user confirms | Pass 1 confirm |
+| 3 | **changelog** | Parses git log → Conventional Commits categorization → drafts entry → prepends to `CHANGELOG.md` | Edit gate before write |
+| 4 | **build_verify** | Runs auto-detected build/test commands; writes `docs/harness/ship-<slug>/changes.md` | None (read-only verify) |
+| 5 | **code_review** | Optional summary review of staged changes (delegates to `/code-review`) | (delegates) |
+| 6 | **git_ops** | Commits via `-F` (no shell injection), creates annotated tag, splits branch/tag push | Commit + branch-push + tag-push gates |
+| 7 | **gh_release** | Extracts `CHANGELOG.md`'s `## [{version}]` section → `gh release create --notes-file` | Release-create gate |
+
+### Auto-Detection
+
+| Signal | Detected via | Effect when missing |
+|--------|-------------|---------------------|
+| `has_git` | `git rev-parse --is-inside-work-tree` | Skip `git_ops` |
+| `has_gh` | `gh --version` | Skip `gh_release` |
+| `has_gh_auth` | `gh auth status` | Skip `gh_release` |
+| Package manifest | `package.json` / `pyproject.toml` / `Cargo.toml` / `pom.xml` / `build.gradle(.kts)` / `*.csproj` | Skip `version_bump` |
+| Build/test commands | Inferred from manifest type | Skip `build_verify` |
+
+### Safety
+
+- **Tag-name regex (strict 254-char hard cap)**: `^(v[0-9a-zA-Z][0-9a-zA-Z._-]{0,252}|[0-9a-zA-Z][0-9a-zA-Z._-]{0,253})$` — rejects pathological inputs while preserving conventional tag names (introduced in v8.2.0).
+- **Branch name regex**: `^[a-zA-Z0-9/_.-]+$`
+- **`-F` patterns** for commit/tag messages — no shell injection via release notes or commit text.
+- **`.harness/` cleanup Safety Guard** (v8.2.0): skill identity check + resolved-parent depth check + unconditional `Path.resolve() ⊆ Path.cwd()` symlink-escape check + display-before-delete + symlink-aware deletion (`is_symlink()` short-circuit / `follow_symlinks=False`).
+
+### Session Recovery
+
+State is checkpointed at every substep (`version_bump_pass1_done`, `git_branch_pushed`, `git_push_done`, etc.). Resuming `/ship` after interruption picks up at the exact substep, re-checks already-pushed branches/tags via `git ls-remote`, and skips completed operations.
+
+### File Structure
+
+```
+.harness/
+├── state.json               # current_stage, substep, stages_selected, release_version, tag_name
+├── changelog_draft.md       # Conventional Commits classification (Step 3)
+├── release_notes.md         # extracted CHANGELOG section (Step 7)
+├── commit_msg.txt           # commit message (Step 6, -F input)
+└── tag_msg.txt              # tag message (Step 6, -F input)
+
+docs/harness/ship-<slug>/
+└── changes.md               # build_verify output (Step 4)
+
+CHANGELOG.md                  # repo root, Keep a Changelog format (Step 3 prepends)
+```
+
+### Language Support
+
+Communicates in the user's language for progress, questions, confirmations, errors, and gate prompts. State.json field names, file names, branch/tag names, and commit message structure stay in English for tooling compatibility.
 
 ---
 
