@@ -40,6 +40,15 @@ Items deferred from v8.1 with rationale:
 | **M1 (remaining) — GIF/asciinema demo** | AI cannot record terminal sessions or produce binary media | **Manual action required**: user must record with asciinema/VHS and add to README |
 | **M2 (remaining) — Stars/Forks growth, X/Reddit posts, Discussion replies** | AI cannot perform social or community actions | **Manual action required** |
 
+### Residual review gaps (post-v8.1 verification)
+
+Verified residual items from `/ship` skill review (`docs/harness/unstaged-changes/review_report_final.md`). Critical/Correctness items from v8.1 were resolved in `11c4d5e`; the following remain:
+
+| Item | File:Line | Severity | Description |
+|------|-----------|----------|-------------|
+| **S1 — Ship Safety Guard parity with /workflow** | `skills/ship/SKILL.md:658-662` | Major | Ship's `.harness/` cleanup uses depth check + skill identity check, but lacks explicit symlink-escape verification (`Path.resolve() ⊆ Path.cwd()`) and the "Display target before delete" step that `/workflow` uses (`skills/workflow/SKILL.md:931-944`). |
+| **S2 — Tag name length bound** | `skills/ship/SKILL.md:551` | Minor | Tag regex `^v?[0-9a-zA-Z][0-9a-zA-Z._-]*$` has no upper length bound; pathological inputs (e.g., 10k-char tags) bypass validation. Add `{N,M}` length constraint or explicit `len(tag_name) <= 255` check. |
+
 ---
 
 ## Non-Goals
