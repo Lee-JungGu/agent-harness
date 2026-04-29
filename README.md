@@ -1025,8 +1025,9 @@ A standalone utility skill that optimizes your project's CLAUDE.md and markdown 
 
 See [ROADMAP.md](ROADMAP.md) for the full roadmap with rationale.
 
+- **v8.2** (Shipped): `/ship` Safety Guard parity with `/workflow` (unconditional symlink-escape check, display-before-delete, symlink-aware deletion), strict 254-char tag-name regex hard cap
 - **v8.1** (Shipped): Path Validator single source, Auto-fix State Transition Table (invariants I1–I4), `--verifier-model` flexibility, `--output-dir` flag, Auto-fix proposal for Layer 1 failures (both `/workflow` and `/refactor`), `.github/` contribution templates
-- **v8.2+**: Custom persona override (`templates/user-override/`), GIF demo, external CLI wrapper
+- **v8.3+**: Custom persona override (`templates/user-override/`), GIF demo, external CLI wrapper, `/ship` version_bump auto-detection for `.claude-plugin/*.json`
 
 ---
 
