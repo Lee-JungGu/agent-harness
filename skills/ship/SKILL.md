@@ -286,6 +286,7 @@ Print: `[harness:ship] Stage: Version Bump`
 
 1. Find all files containing the current version string:
    - `package.json`, `pyproject.toml`, `Cargo.toml`, `pom.xml`, `build.gradle(.kts)`, `*.csproj`
+   - `.claude-plugin/plugin.json` (top-level `$.version`) and `.claude-plugin/marketplace.json` (`$.metadata.version` and `$.plugins[*].version` for each plugin entry). Use JSON parsing to identify exact key paths; the `$.foo` notation is a readability convention, not strict JSONPath. If a file is missing, treat as not-detected and continue. If JSON parse fails in Pass 1, treat as not-detected here and let Pass 2 handle the failure with full user-facing error flow (avoids duplicate prompts).
    - Also search: `git tag --list | grep {current_version}` (do NOT apply — record only)
    - Also grep source files for version constants (e.g., `VERSION = "..."`, `const VERSION`)
 2. **List all found locations** to user. Update state.json: `substep → "version_bump_pass1_done"`.
@@ -309,12 +310,29 @@ If "Stop": halt.
 
 #### Pass 2 — Apply Updates
 
-Update all detected version references. For each file:
-- Read the file, replace `{current_version}` with `{release_version}`.
+Update all detected version references. For each file, dispatch by file kind:
+
+**For `.claude-plugin/plugin.json` and `.claude-plugin/marketplace.json`** (JSON-aware path):
+
+1. Detect the original line-ending convention by inspecting raw bytes (e.g., `b"\r\n" in raw`), the UTF-8 BOM prefix (`b"\xef\xbb\xbf"` at file start), and the original trailing-newline state. Remember all three. This is critical because `.claude-plugin/*.json` files may use CRLF on Windows-authored repos and may have a BOM; serializing back as plain LF without BOM would create noise diffs touching every line or strip the BOM silently.
+2. Parse the file as JSON (UTF-8). On parse failure, do NOT fall through to string replace — instead emit a warning (`⚠ Invalid JSON at <path> — cannot determine version key path`) and ask the user via AskUserQuestion (`user_lang`) to "skip this file" or "abort stage". On "skip", exclude the file from Pass 2 and proceed with the remaining files; on "abort", halt the stage (state.json `substep` retains its current value for resume).
+3. For each detected JSON key path identified in Pass 1 (e.g., `$.version`, `$.metadata.version`, `$.plugins[i].version`):
+   - If the key path does not exist (e.g., a `plugins[i]` entry without a `version` field), silently skip — this is a normal optional-field case, no warning required.
+   - Else if the current value at that key path already equals `{release_version}`, silently skip — idempotent re-run case, no warning required.
+   - Else if the current value at that key path equals `{current_version}`, set it to `{release_version}`.
+   - Else (current value differs from both `{current_version}` and `{release_version}`), leave it untouched and log a warning (`⚠ Version drift at <path>#<key_path>: expected {current_version}, found <value>`).
+4. Serialize the JSON preserving key order, indentation (match the original — typically 2 spaces), AND the original line-ending convention (CRLF vs LF), BOM prefix, and trailing-newline state detected in step 1. Do NOT use `json.dumps` defaults blindly; post-process the serialized string (and prepend the BOM bytes) to restore CRLF, BOM, and trailing-newline if the original used them.
+5. Write back, then re-parse the written file to confirm JSON validity, and re-read to confirm the new version string is present at the same key path.
+
+**Important regression-blocker**: Do NOT apply naive string replace to `.claude-plugin/*.json` files. JSON path matching ensures that other fields (e.g., `description: "Initial 8.2.0 release notes…"`) containing the same version string by coincidence are NOT modified.
+
+**For all other detected files** (standard package manifests, source constants):
+
+- Read the file, replace `{current_version}` with `{release_version}` (string replace).
 - Write the file back.
 - Verify the replacement succeeded (re-read and confirm).
 
-Update state.json: `substep → "version_bump_pass2_done"`, `stage_results.version_bump_files → [list of modified file paths]`.
+Update state.json: `substep → "version_bump_pass2_done"`, `stage_results.version_bump_files → [list of modified file paths]` (paths only — JSON key-path metadata stays in-memory only for backward compatibility).
 
 Print: `  ✓ Version updated in {N} files`
 

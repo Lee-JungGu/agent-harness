@@ -2,6 +2,13 @@
 
 ## v8.x — Shipped
 
+**v8.3.0** — Ship version_bump auto-detection for `.claude-plugin/*.json`
+
+- **N1 — `/ship` version_bump auto-detection for `.claude-plugin/*.json`**: Stage 2 (`version_bump`) now auto-detects version fields in `.claude-plugin/plugin.json` (top-level `$.version`) and `.claude-plugin/marketplace.json` (`$.metadata.version` + `$.plugins[*].version`) alongside the existing standard package manifests. Pass 2 uses JSON parsing on exact key paths to avoid regression where naive string replace would taint other fields (e.g., a `description` containing the same version string). Original line-ending (CRLF vs LF) and trailing-newline state are preserved.
+  See: `skills/ship/SKILL.md §Step 2 Stage — version_bump (Pass 1 + Pass 2)`
+
+---
+
 **v8.2.0** — Ship security hardening: Safety Guard parity + tag-length bound
 
 - **S1 — Ship Safety Guard parity with /workflow**: `.harness/` cleanup now performs unconditional symlink-escape check (`Path.resolve() ⊆ Path.cwd()`, no `has_git` gating) and prints the exact absolute target path before deletion, mirroring the `/workflow` Artifact Cleanup Safety Guard.
@@ -46,7 +53,6 @@ Items deferred from v8.1 / v8.2 with rationale:
 | **M4 — Custom persona override** (`templates/user-override/`) | Variable contract definition required first; ROI analysis pending real usage data | Architect/Senior split: Senior recommended deferral. Minimum viable: `.harness/templates/` project-level override only |
 | **M3 — Template compression** | Senior measured actual templates: avg 46 lines, max 185 lines (~2–3k tokens). Feedback premise of "8–12k tokens" did not match measurements | Re-evaluate after v8.1 usage data |
 | **L1 — External CLI wrapper** | Claude Code's `/skill` invocation already functions as CLI; separate repo adds maintenance burden disproportionate to value | Reconsider if community demand emerges |
-| **N1 — `/ship` version_bump auto-detection for `.claude-plugin/*.json`** | Discovered during v8.2.0 release: `/ship` Stage 2 auto-detects only standard package manifests (`package.json`, `pyproject.toml`, `Cargo.toml`, `pom.xml`, `build.gradle(.kts)`, `*.csproj`); plugin/marketplace metadata required manual bumping | Extend Stage 2 search patterns at `skills/ship/SKILL.md:287-290` to include `.claude-plugin/plugin.json` and `.claude-plugin/marketplace.json` (top-level + nested `plugins[].version`) |
 
 ### Residual review gaps (post-v8.1 verification)
 

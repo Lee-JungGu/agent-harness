@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 Commit messages follow [Conventional Commits](https://www.conventionalcommits.org/).
 
+## [8.3.0] — 2026-04-29
+
+### Added
+
+- **feat(ship): auto-detect `.claude-plugin/*.json` version fields in Stage 2** — `/ship` Stage 2 (`version_bump`) now identifies version references in `.claude-plugin/plugin.json` (top-level `$.version`) and `.claude-plugin/marketplace.json` (`$.metadata.version` and `$.plugins[*].version` for each plugin entry) alongside the existing standard package manifests (`package.json`, `pyproject.toml`, etc.). Pass 2 applies updates via JSON parsing on these key paths, preserving the original line-ending convention (CRLF vs LF) and avoiding the regression where naive string replace would taint coincidentally-equal version strings in other fields (e.g., `description: "Initial 8.2.0 release notes…"`). Resolves residual gap N1 from v8.2.0.
+
 ## [8.2.0] — 2026-04-29
 
 ### Fixed
