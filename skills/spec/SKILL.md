@@ -104,6 +104,10 @@ When the user provides a task description (via $ARGUMENTS or in conversation), e
 2. **Slugify the task:** lowercase, transliterate non-ASCII to ASCII, remove non-word chars except hyphens, replace spaces with hyphens, truncate to 50 chars. Store as `<slug>`.
 3. **Create directories:** `.harness/`, `.harness/spec/`, `docs/harness/<slug>/`
 4. **Create git branch (if has_git):** `git checkout -b harness/spec-<slug>`. If `has_git == false`, skip this step entirely.
+4.5. **Parse `--reference <path>` flag (NEW in 8.4):**
+   - If `--reference <path>` provided, validate via Path Validator (`kind=file_reference`, see workflow §Path Validator). On validation failure, halt with explicit error message (mirror workflow `--output-dir` halt-on-fail behavior — do NOT silently fall back to auto-detect).
+   - On valid path: store as `cli_flags.reference: <path>` in state.json. Will be consumed by Step 1.5 Convention Scan.
+   - If not provided: `cli_flags.reference: null`.
 5. **Mode selection:** If `--mode quick` or `--mode deep` was passed, set mode and skip prompt. Otherwise, use AskUserQuestion to ask the user (in `user_lang`):
      header: "Mode"
      question: "Select spec mode:"
