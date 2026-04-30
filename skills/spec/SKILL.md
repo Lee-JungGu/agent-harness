@@ -46,7 +46,7 @@ When displaying status, read `.harness/state.json` and print (in `user_lang`):
   Branch   : <branch>                      ← omit if has_git == false
   Output   : <docs_path>
 ```
-Phase labels: `setup` → "Setup — initializing", `qa_active` → "Q&A — discovering requirements", `qa_complete` → "Q&A complete — ready for spec generation", `gen_ready` → "Generating specification", `spec_ready` → "Spec ready — awaiting approval", `completed` → "Completed"
+Phase labels: `setup` → "Setup — initializing", `qa_active` → "Q&A — discovering requirements", `qa_complete` → "Q&A complete — ready for spec generation", `gen_ready` → "Generating specification", `spec_ready` → "Spec ready — awaiting approval", `convention_scan_active` → "Convention Scan — running", `critic_active` → "Critic — reviewing spec", `critic_complete` → "Critic complete — awaiting Final HARD-GATE", `completed` → "Completed"
 
 ## Session Recovery
 
@@ -143,6 +143,39 @@ When the user provides a task description (via $ARGUMENTS or in conversation), e
      Model  : <preset name>           ← omit if quick mode
      Output : docs/harness/<slug>/spec.md
    ```
+
+### Step 1.5: Convention Scan (NEW in 8.4)
+
+This step runs after Setup and before Phase 1 Q&A. It populates `state.conventions` for downstream analyst injection.
+
+**`conventions` field contract** (mirrors workflow):
+- `null` → Step 1.5 not yet executed
+- `"skipped"` → user explicitly chose to skip
+- `"file:.harness/conventions.md"` → conventions copied locally; analysts inject via `{conventions}` variable
+
+**Order of evaluation:**
+
+1. **`--reference` priority**: If `cli_flags.reference` is non-null and the file exists, copy its content to `.harness/conventions.md`, set `state.conventions → "file:.harness/conventions.md"`, and skip the rest of Step 1.5.
+
+2. **`has_git == true` branch** (workflow Step 1.5 mechanism — reuse):
+   - CLAUDE.md ≥ 50 lines → copy to `.harness/conventions.md`, set conventions accordingly.
+   - CLAUDE.md sparse/missing → AskUserQuestion: `Scan / Skip`. If Scan, dispatch convention scanner sub-agent (model: `model_config.advisor` or default). Verify file exists; on retry × 2 failure, fall back to `"skipped"`.
+
+3. **`has_git == false` branch** (NEW spec-only logic):
+   - Search the following 7 explicit paths (case-insensitive — implementation: `Path.name.lower() == candidate.lower()`):
+     - `cwd/STYLE_GUIDE.md`
+     - `cwd/CONTRIBUTING.md`
+     - `cwd/conventions.md`
+     - `cwd/guidelines.md`
+     - `cwd/policy.md`
+     - `cwd/docs/style-guide.md`
+     - `cwd/docs/conventions.md`
+   - Filter to files with ≥ 50 lines.
+   - 0 matches → set `conventions → "skipped"`.
+   - 1 match → copy content to `.harness/conventions.md`, set conventions accordingly.
+   - 2+ matches → AskUserQuestion with top-3 matches as options + 1 "Skip" option. On selection, copy chosen file. On Skip, set `conventions → "skipped"`.
+
+**Update phase:** `phase → "convention_scan_active"` at entry, then proceed to Phase 1.
 
 ### Phase 1 — Requirements Discovery (Multi-round Q&A)
 
