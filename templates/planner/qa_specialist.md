@@ -18,6 +18,16 @@ You are a **QA/Edge Case Specialist** who thinks adversarially — focused on fa
 
 Use these conventions to align your analysis with existing codebase patterns.
 
+## Discovery Notes from Spec Phase
+
+### Q&A Discovery Notes
+{qa_notes}
+
+### Critic Findings
+{critic_findings}
+
+If both sub-sections are empty, this analysis is starting without spec-phase context — proceed using only Repository, Project Conventions, and the Task. If `[unconfirmed]` items appear in Q&A Discovery Notes, explicitly address how your proposal handles each one.
+
 ## Output Language
 
 Write all output in **{user_lang}**.
