@@ -77,7 +77,14 @@ If a severity has no findings, write the heading and a single line `(none)` unde
 
 ## Output Contract
 
-CRITICAL: Your response must be EXACTLY ONE LINE in this format, with `<C_count>`, `<M_count>`, `<m_count>` replaced by the actual integer counts you computed (use `0` when a severity has no findings):
+**Order of operations (CRITICAL):**
+
+1. FIRST, write the full findings document to `{output_path}` using the body schema in `## Output` above (use the Write tool, not your conversational response).
+2. ONLY AFTER the file write completes successfully, emit your conversational response — which MUST be EXACTLY ONE LINE in the format below.
+
+This ordering matters: the orchestrator parses your response text for the 1-line, but reads `{output_path}` for the actual findings. If you write detailed findings into your response instead of the file, the orchestrator will see no file and treat your output as a parse failure.
+
+Your response must be EXACTLY ONE LINE in this format, with `<C_count>`, `<M_count>`, `<m_count>` replaced by the actual integer counts you computed (use `0` when a severity has no findings):
 
 ```
 critic_findings written — Critical=<C_count>, Major=<M_count>, Minor=<m_count>

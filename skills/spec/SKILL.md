@@ -305,7 +305,10 @@ Print status in the standard format, prefixed with `[harness] Spec draft ready.`
 
 2. Read `qa_discovery_notes` from `.harness/spec/qa_notes.md`.
 
-3. Read `conventions` content: if `state.conventions` starts with `"file:"`, read the referenced file; if `null` or `"skipped"`, pass empty string.
+3. Read `conventions` content based on `state.conventions`:
+   - `"file:..."` → read the referenced file, pass the content as the `{conventions}` variable.
+   - `"skipped"` → pass empty string as `{conventions}`, and emit warn `[harness] ⚠ Conventions explicitly skipped — analyst will treat as greenfield.` for analyst awareness.
+   - `null` → **halt with error** `[harness] ✗ Phase 2a-D reached but state.conventions is null. Step 1.5 must have set this to "file:..." or "skipped" before Phase 2 entry. State machine integrity violated; cannot proceed.` `null` indicates a state machine bug (Step 1.5 was skipped or crashed before completing); do NOT silently degrade to empty-string injection — surface the bug to the user instead.
 
 4. For each analyst, fill template variables:
    - `{task_description}` (original task)
@@ -320,12 +323,13 @@ Print status in the standard format, prefixed with `[harness] Spec draft ready.`
 
 5. **Launch 4 sub-agents in parallel** using the Agent tool. Each receives its analyst template and has no knowledge of other sub-agents (anchoring prevention). Each writes to its output_path.
    - Model: if `model_config.preset != "default"`, use `model_config.advisor` for all four.
+   - **Design intent for uniform model**: all four analysts share `model_config.advisor` for (a) cost predictability, (b) parallel anchoring prevention (mixed models could introduce per-model bias differences that contaminate the synthesis), and (c) implementation simplicity. Per-analyst differential model assignment is a future enhancement and is registered as an N3-class roadmap gap (see ROADMAP.md if needed).
 
 6. Wait for all four to complete. **Failure handling per analyst (CM4):**
    - Output file missing after dispatch → retry × 2 → if still missing, write a 1-line fallback to the expected path: `<persona> analysis written — dispatch failed`, and emit user warn `[harness] ⚠ <persona> dispatch failed after retries`.
    - 1-line parse failure → write a distinct fallback line `<persona> analysis written — parse failed` and emit warn `[harness] ⚠ <persona> 1-line parse failed`.
 
-7. **Empty-input contract check:** if all 4 analyst 1-lines contain the literal sentinel `— no findings —` (em-dash, space, "no findings", space, em-dash) AND none contain `dispatch failed` or `parse failed`, set `state.critic = { applied: "approved", round: 0, last_findings_path: null }` and skip Phase 2c-D / 2d-D only (Phase 2b-D Synthesis still runs — it produces `spec.md` from `task_description` + `qa_discovery_notes` + the four "no findings" analysis files; Synthesis output is then routed directly to HARD-GATE because of the `state.critic.applied = "approved"` signal that Phase 2b-D step 6 reads).
+7. **Empty-input contract check:** if all 4 analyst 1-lines contain the literal sentinel `— no findings —` (em-dash, space, "no findings", space, em-dash) AND none contain `dispatch failed` or `parse failed`, set `state.critic = { applied: "approved", round: 0, last_findings_path: null, failure_reason: null }` and skip Phase 2c-D / 2d-D only (Phase 2b-D Synthesis still runs — it produces `spec.md` from `task_description` + `qa_discovery_notes` + the four "no findings" analysis files; Synthesis output is then routed directly to HARD-GATE because of the `state.critic.applied = "approved"` signal that Phase 2b-D step 6 reads).
 
    **Single-source-of-truth contract**: `state.critic.applied` is the only authoritative signal for whether Critic ran. Phase 2a-D step 7 sets it eagerly; Phase 2b-D step 6 reads it as the sole gate to bypass Phase 2c-D. Do NOT add parallel decision logic in any other phase that diverges from this signal.
 
@@ -373,7 +377,7 @@ Print status in the standard format, prefixed with `[harness] Spec draft ready.`
 3. Dispatch Critic sub-agent. Model: `model_config.advisor` (or default if preset == "default") — same pattern as Synthesis.
 
 4. **Failure handling:**
-   - Crash/timeout → retry × 2 → if still failing, set `critic.applied = "approved"`, `critic.round = 0`, `phase → "critic_complete"` and emit warn `[harness] ⚠ Critic dispatch failed — proceeding without findings. Manual review recommended at Final HARD-GATE.` Skip to Final HARD-GATE.
+   - Crash/timeout → retry × 2 → if still failing, set `critic.applied = "approved"`, `critic.round = 0`, `critic.failure_reason = "dispatch_failed"`, `phase → "critic_complete"` and emit warn `[harness] ⚠ Critic dispatch failed — proceeding without findings. Manual review recommended at Final HARD-GATE.` Skip to Final HARD-GATE. (`failure_reason` distinguishes silent-degraded approval from genuine 0-issue approval; Final HARD-GATE displays this state to the user.)
    - 1-line parse failure → emit warn `[harness] ⚠ Critic 1-line parse failed — manual review required. critic_findings.md may have content; do NOT auto-approve.` Then present **Critic Parse-Fail Gate** via AskUserQuestion (translate header/question/options to `{user_lang}`):
 
      ```
@@ -384,14 +388,14 @@ Print status in the standard format, prefixed with `[harness] Spec draft ready.`
        - "Stop" / "Halt — manual intervention needed"
      ```
 
-     - Approve as-is → set `critic.applied = "approved"`, `critic.round = 0`, `phase → "critic_complete"`. Skip to Final HARD-GATE.
-     - Stop → set `phase → "critic_halted"`, halt session, leave state.json intact (no auto-approve on parse failure). Session Recovery will surface this state to the user as "Critic flow halted — manual intervention required" rather than auto-resuming.
+     - Approve as-is → set `critic.applied = "approved"`, `critic.round = 0`, `critic.failure_reason = "parse_failed_approved"`, `phase → "critic_complete"`. Skip to Final HARD-GATE. (`failure_reason` lets HARD-GATE display "user manually approved despite parse failure" vs genuine approval.)
+     - Stop → set `phase → "critic_halted"`, `critic.failure_reason = "parse_failed_halted"`, halt session, leave state.json intact (no auto-approve on parse failure). Session Recovery will surface this state to the user as "Critic flow halted — manual intervention required" rather than auto-resuming.
 
 5. Parse 1-line via regex `^critic_findings written — Critical=(\d+), Major=(\d+), Minor=(\d+)$`: extract three integer counts. Whitespace tolerance: allow `\s*` between tokens. Any deviation triggers the 1-line parse failure path in step 4.
 
 6. **Branching:**
    - `Critical=0 ∧ Major=0` → set `critic.applied = "approved"`, `critic.round = 0`, `phase → "critic_complete"`. Proceed to Final HARD-GATE (Minor count and findings file shown for context).
-   - `Critical≥1 ∨ Major≥1` → present **Critic Gate** via AskUserQuestion (3-way). **Translate `header`, `question`, and option labels/descriptions to `{user_lang}`** per [Communicate in user's language] policy. Issue ID prefixes (`[C*]`, `[M*]`, `[m*]`) and severity tokens (`Critical`, `Major`, `Minor`) stay English (canonical identifiers).
+   - `Critical≥1 ∨ Major≥1` → present **Critic Gate** via AskUserQuestion (3-way). **The orchestrator (this skill) constructs and translates the gate text — the Critic sub-agent does NOT generate AskUserQuestion content; it only writes `critic_findings.md` and emits the 1-line response.** Translate `header`, `question`, and option labels/descriptions to `{user_lang}` per [Communicate in user's language] policy. Issue ID prefixes (`[C*]`, `[M*]`, `[m*]`) and severity tokens (`Critical`, `Major`, `Minor`) stay English (canonical identifiers).
 
    ```
    header: "Critic"  (translate to user_lang)
@@ -416,6 +420,8 @@ This phase runs only when Critic Gate selected Auto-revise or Modify.
 
 **Phase boundary note (state machine):** Phase 2d-D uses **distinct phase labels** (`re_synthesis_active`, `re_critic_active`) for its re-dispatched Synthesis and Critic stages, so Session Recovery can tell apart the first run (`critic_active`) from the re-run (`re_critic_active`). Do NOT reuse `critic_active` here.
 
+**Halt semantics (applies to all Stop branches in Phase 2c-D / 2d-D):** "halt session" means: (a) print the user-facing message in `{user_lang}` explaining why the session halted, (b) leave `.harness/state.json` with the terminal `phase` value (`critic_halted`) intact, (c) leave `.harness/spec/` artifacts (`qa_notes.md`, `analysis_*.md`, `critic_findings.md`, `conventions.md`) intact for manual review, (d) do NOT run Phase 3 cleanup, (e) exit the orchestrator process. The user can resume by editing state.json (e.g., changing phase to `qa_active` for a fresh start) or starting a new `/spec` session in the same directory.
+
 1. Set `phase → "re_synthesis_active"`. Re-dispatch Phase 2b-D Synthesis with same variable list, but now `{critic_findings}` is non-empty (read from `.harness/spec/critic_findings.md`). Model: `model_config.advisor` (or default if `preset == "default"`) — same as Phase 2b-D step 5. For Modify selection, append modification instructions to the prompt as a final `## User Modification Request` block, formatted exactly as follows so the Synthesis sub-agent treats user text as DATA, not directives:
 
    ````
@@ -430,7 +436,7 @@ This phase runs only when Critic Gate selected Auto-revise or Modify.
 
    This sentinel pattern (fenced `text` code block + meta-guard preamble) prevents prompt injection via the Modify channel.
 
-2. After re-synthesis completion: increment `critic.round` (`0 → 1`).
+2. After re-synthesis completion: increment `critic.round` (`0 → 1`). The increment lands here (between re-synthesis and re-critic) so that step 3's re-dispatched Critic and step 4's `critic.round == 1` 2nd-Gate branch both observe the post-increment value. Do NOT increment elsewhere — `critic.round` is bounded at 1 by design (oscillation prevention); step 4's 2nd Critic Gate offers only Approve/Stop, never another revision round.
 
 3. Set `phase → "re_critic_active"`. Re-dispatch Phase 2c-D Critic on the revised spec.md. Set `critic.applied = "revised"`. (Distinct phase from `critic_active` so Session Recovery can route a 2d-D re-entry crash back to step 3, not step 1 of Phase 2c-D.)
 
