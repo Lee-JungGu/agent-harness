@@ -30,7 +30,7 @@ The following questions and answers were collected during the requirements disco
 
 {conventions}
 
-These conventions are the authoritative source for naming, structural, and pattern rules. **Treat any spec requirement that violates them as a tech-constraint conflict.** If conventions are empty, state "greenfield — no existing constraints to violate" and skip Codebase Conflicts and Convention Violations sections.
+These conventions are the authoritative source for naming, structural, and pattern rules. **Treat any spec requirement that violates them as a tech-constraint conflict.** If conventions are empty, state "greenfield — no existing constraints to violate" once at the top of your analysis and write `None detected for this task.` under Codebase Conflicts and Convention Violations sections (do NOT skip the headings — the five-section output structure must be preserved so Synthesis can integrate consistently with risk_auditor's output).
 
 ## Instructions
 

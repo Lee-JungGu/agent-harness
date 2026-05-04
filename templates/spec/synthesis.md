@@ -41,16 +41,16 @@ Write all output in **{user_lang}**. All section headings and content in the fin
 
 ## Instructions
 
-Synthesize the four analyses (and Critic findings if revising) into a final spec. You are not choosing one analysis over the other — you are integrating the best insights from both into a unified document.
+Synthesize the four analyses (and Critic findings if revising) into a final spec. You are not choosing one analysis over the others — you are integrating the best insights from all four perspectives into a unified document.
 
-1. **Integrate without conflict** — Merge requirements-perspective findings with scenario-perspective findings. Where both analyses agree, state it once clearly. Where they complement each other, combine them.
+1. **Integrate without conflict** — Merge findings across all four perspectives (requirements, scenarios, risk, tech constraints). Where multiple analyses agree, state the conclusion once clearly. Where they complement each other, combine them.
 
-2. **Resolve conflicts** — If the two analyses contradict each other, apply this resolution priority:
+2. **Resolve conflicts** — If two or more analyses contradict each other, apply this resolution priority:
    - Explicitly confirmed Q&A answers take precedence over analyst inference.
    - User-facing impact takes precedence over internal system behavior.
    - More restrictive interpretation is safer when uncertain (flag with `[unconfirmed]` translated to `{user_lang}`).
 
-3. **Write Given/When/Then acceptance criteria** — For each key behavior identified across both analyses, write at least one acceptance criterion in Given/When/Then format. Cover:
+3. **Write Given/When/Then acceptance criteria** — For each key behavior identified across all four analyses, write at least one acceptance criterion in Given/When/Then format. Cover:
    - Core happy-path flows (from User Scenarios)
    - Critical edge cases (from Edge Cases)
    - Key error scenarios (from Error Scenarios)
@@ -70,13 +70,13 @@ Use **exactly** this seven-section structure. Translate all headings and content
 
 ```markdown
 ## Goal
-<One paragraph: what this product/feature achieves and for whom. Synthesized from both analyses.>
+<One paragraph: what this product/feature achieves and for whom. Synthesized from all four analyses.>
 
 ## Background & Decisions
 <Context, motivation, and confirmed decisions. Include key decisions surfaced by Q&A and analyst findings.>
 
 ## Scope
-<Bulleted list of in-scope features and behaviors. Merge requirements from both analyses. Remove duplicates.>
+<Bulleted list of in-scope features and behaviors. Merge requirements from all four analyses. Remove duplicates.>
 
 ## Out of Scope
 <Bulleted list of explicitly excluded items. Include items the analysts flagged as out-of-scope or where the task boundaries were clarified.>

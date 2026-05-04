@@ -157,11 +157,16 @@ This step runs after Setup and before Phase 1 Q&A. It populates `state.conventio
 - `"skipped"` → user explicitly chose to skip
 - `"file:.harness/conventions.md"` → conventions copied locally; analysts inject via `{conventions}` variable
 
+**Shared file ownership note** (NEW in 8.4 hardening): `.harness/conventions.md` is shared between `/spec` and `/workflow` skills (both write and read it via the same path). To prevent contract drift:
+- **Writer authority**: only the skill currently in its Step 1.5 phase (whichever ran most recently) is authoritative for the file's contents.
+- **Lifetime**: the file persists across `/spec` → `/workflow` handoff (do NOT delete during /spec Phase 3 cleanup; see Phase 3 Handoff in Task 13).
+- **Schema sync**: if either skill changes the `conventions` field's allowed values (`null` / `"skipped"` / `"file:..."` literal), both skills must be updated together — otherwise the receiving skill silently accepts an unknown form.
+
 **Order of evaluation:**
 
 1. **`--reference` priority**: If `cli_flags.reference` is non-null and the file exists, copy its content to `.harness/conventions.md`, set `state.conventions → "file:.harness/conventions.md"`, and skip the rest of Step 1.5.
 
-2. **`has_git == true` branch** (workflow Step 1.5 mechanism — reuse):
+2. **`has_git == true` branch** (mirrors workflow Step 1.5 logic — must be kept in sync if `/workflow` Step 1.5 changes; this is convention duplication, not code reuse):
    - CLAUDE.md ≥ 50 lines → copy to `.harness/conventions.md`, set conventions accordingly.
    - CLAUDE.md sparse/missing → AskUserQuestion: `Scan / Skip`. If Scan, dispatch convention scanner sub-agent using template `{CLAUDE_PLUGIN_ROOT}/templates/planner/convention_scanner.md` (model: `model_config.advisor` or default). Verify file exists; on retry × 2 failure, fall back to `"skipped"`.
 
