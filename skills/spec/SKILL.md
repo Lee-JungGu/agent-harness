@@ -77,14 +77,26 @@ Before starting a new task, check if `.harness/state.json` already exists **and*
 
    Actions per selection:
    - **Resume**: Jump to the step matching state.json phase:
-     `setup` → Step 1 |
-     `qa_active` → Phase 1 Q&A (resume current qa_round) |
-     `qa_complete` → Phase 2 Spec Generation |
-     `gen_ready` → Phase 2 Spec Generation |
-     `spec_ready` → HARD GATE (show existing spec.md) |
-     `completed` → no active session, proceed to Step 1
+     - `setup` → Step 1
+     - `convention_scan_active` (NEW in 8.4) → re-run Step 1.5 from start (idempotent — scanner overwrites `.harness/conventions.md`; `--reference` priority branch is also idempotent)
+     - `qa_active` → Phase 1 Q&A (resume current `qa_round`)
+     - `qa_complete` → Phase 2 Spec Generation (entry)
+     - `gen_ready` → Phase 2 Spec Generation (entry)
+     - `critic_active` (NEW in 8.4, deep mode) — branch on `state.critic.applied`:
+       - `"approved"` → skip directly to Final HARD-GATE (Critic already concluded — typically reached if session was paused after the gate but before phase advance)
+       - `"pending"` → re-present Critic Gate using `state.critic.last_findings_path` (do NOT re-dispatch Critic — findings already exist)
+       - `"revised"` → re-enter Phase 2d-D step 3 (re-Critic dispatch on revised spec.md)
+       - otherwise (null/unknown) → re-dispatch Phase 2c-D Critic from start
+     - `re_synthesis_active` (NEW in 8.4, deep mode) → re-enter Phase 2d-D step 1 (Re-synthesis); `state.critic.round` is at its pre-increment value (0)
+     - `re_critic_active` (NEW in 8.4, deep mode) → re-enter Phase 2d-D step 3 (Re-Critic dispatch); `state.critic.round` is already 1
+     - `critic_complete` (NEW in 8.4, deep mode) → Final HARD-GATE (HARD-GATE entry will normalize `phase → "spec_ready"`)
+     - `critic_halted` (NEW in 8.4, deep mode, **terminal**) — do NOT auto-resume. Surface this state to the user with the message: "Previous spec session halted in Critic flow (`failure_reason: <state.critic.failure_reason>`). Manual intervention required — review `.harness/spec/critic_findings.md` and either fix manually + edit state.json to set `phase` to `qa_active` (fresh start with same Q&A) or choose Restart/Stop." Do NOT auto-route to any phase.
+     - `spec_ready` → HARD GATE (show existing spec.md)
+     - `completed` → no active session, proceed to Step 1
    - **Restart**: Delete `.harness/` directory and proceed to Step 1
    - **Stop**: Delete `.harness/` directory and halt
+
+**Backward compat (8.4)**: pre-8.4 state.json files lack the `cli_flags.reference`, `conventions`, and `critic` fields. Treat each as `null` default via the `state.get(field, null)` pattern (mirrors `/workflow`'s pre-v8.1 backward-compat policy in `skills/workflow/SKILL.md`). A pre-8.4 state.json reaching `qa_complete` and resuming under 8.4 will: (a) treat conventions as null and trigger a hard-error halt at Phase 2a-D step 3 (per single-source-of-truth contract), forcing the user to either Restart or fix conventions manually — this is intentional (we do NOT silently degrade pre-8.4 sessions through the 8.4 flow).
 
 If `.harness/state.json` does not exist (or `skill` field is not `"spec"`), proceed to Step 1 normally.
 
@@ -150,7 +162,33 @@ When the user provides a task description (via $ARGUMENTS or in conversation), e
 
      Store result as `model_config` object: `{ "preset": "<name>", "executor": "<model|null>", "advisor": "<model|null>" }`. For `default` preset, store `{ "preset": "default" }`.
 
-7. **Write `.harness/state.json`** with fields: `task`, `skill` ("spec"), `mode` ("quick"/"deep"), `model_config` (deep mode only; omit or null for quick), `user_lang`, `has_git` (boolean), `phase` ("setup"), `qa_round` (1), `branch` (if has_git: "harness/spec-<slug>", else: null), `docs_path` ("docs/harness/<slug>/"), `created_at` (ISO8601).
+7. **Write `.harness/state.json`** with the following fields:
+   - `task` — the user's task description string
+   - `skill` — `"spec"` (constant)
+   - `mode` — `"quick"` or `"deep"`
+   - `model_config` — deep mode only; omit or `null` for quick
+   - `user_lang` — detected user language
+   - `has_git` — boolean
+   - `phase` — `"setup"` initially; transitions per the Phase labels listed under §Standard Status Format
+   - `qa_round` — `1` initially; incremented per Phase 1 round
+   - `branch` — `"harness/spec-<slug>"` if `has_git`, else `null`
+   - `docs_path` — `"docs/harness/<slug>/"`
+   - `created_at` — ISO8601 timestamp
+   - `cli_flags.reference` (NEW in 8.4) — `null` if `--reference` not provided, or the normalized absolute repo-relative path (post-validation, see step 4.5)
+   - `conventions` (NEW in 8.4) — `null` (Step 1.5 not yet executed), `"skipped"` (user explicitly chose Skip), or `"file:.harness/conventions.md"` (literal sentinel; see §Step 1.5 contract)
+   - `critic` (NEW in 8.4) — `null` (Phase 2c-D not reached) or object:
+     ```
+     {
+       "applied": "pending" | "revised" | "approved",
+       "round": 0 | 1,                 // bounded at 1 by oscillation invariant (Phase 2d-D 2nd Gate offers only Approve/Stop)
+       "last_findings_path": ".harness/spec/critic_findings.md" | null,
+       "failure_reason": null          // genuine 0-issue or user approval
+                       | "dispatch_failed"        // Critic crashed/timed out, auto-approved
+                       | "parse_failed_approved"  // 1-line unparseable, user manually approved
+                       | "parse_failed_halted"    // 1-line unparseable, user halted (terminal)
+     }
+     ```
+     `state.critic.applied = "approved"` is the single-source-of-truth signal that Phase 2b-D step 6 reads to bypass Critic. `failure_reason` is observational (consumed by HARD-GATE display), not a control signal.
 
 8. **Print setup summary** (in `user_lang`):
    ```
