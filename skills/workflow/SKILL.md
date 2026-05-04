@@ -973,7 +973,12 @@ Ask via AskUserQuestion (in `user_lang`):
   - "No commit" / "Clean .harness/ only, keep changes in working tree"
 
 Actions (apply Safety Guard before each delete):
-- "Commit code only": delete `.harness/`, delete `{docs_path}`, stage + commit code
+- "Commit code only": (NEW in 8.4 — protect persisted spec artifacts) BEFORE deleting `{docs_path}`, stage these spec-persistence files for commit if they exist (do NOT error if missing):
+  - `{docs_path}qa_notes.md`
+  - `{docs_path}critic_findings.md`
+  - `{docs_path}conventions.md`
+  
+  After staging, delete `.harness/`, delete `{docs_path}` (the staged files persist in the commit's tree; they're removed from the working directory but recoverable from git history). Commit code. The final commit contains code changes + the 3 spec artifacts.
 - "Commit all": delete `.harness/`, stage + commit `{docs_path}` + code
 - "No commit": delete `.harness/` only
 
