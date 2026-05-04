@@ -543,12 +543,22 @@ Update state.json: `phase` → `"completed"`.
        - label: "Start /workflow" / description: "Launch implementation workflow using this spec"
        - label: "Done" / description: "Keep the spec for later use"
 
-   If user selects "Start /workflow": invoke `/workflow "Implement based on docs/harness/<slug>/spec.md"` (translate the quoted string to `user_lang`).
-   If user selects "Done": clean up `.harness/` and halt.
+   If user selects "Start /workflow": invoke `/workflow --output-dir docs/harness/<slug>/ "Implement based on spec.md"` (translate the quoted string to `user_lang`).
 
-3. **Cleanup:** Delete `.harness/` directory (delete state.json, spec/, and the directory itself). The final `docs/harness/<slug>/spec.md` is preserved.
+   The `--output-dir` argument is **load-bearing** for slug-safe handoff: without it, `/workflow` re-slugifies its own task description and writes to a different `docs/harness/<re-slug>/` directory — silently bypassing the artifacts persisted in step 3 below. Always pass `--output-dir docs/harness/<slug>/` so `/workflow`'s `docs_path` matches `/spec`'s `docs_path` exactly.
 
-4. **If has_git == false:** Do not attempt any git operations.
+   If user selects "Done": clean up `.harness/` (per step 4) and halt.
+
+3. **Persist spec artifacts to `{docs_path}` (NEW in 8.4)** — BEFORE cleanup, copy the following files from `.harness/` into `docs/harness/<slug>/` (only when the source file exists; skip silently if missing):
+   - `.harness/spec/qa_notes.md` → `docs/harness/<slug>/qa_notes.md`
+   - `.harness/spec/critic_findings.md` → `docs/harness/<slug>/critic_findings.md`
+   - `.harness/conventions.md` → `docs/harness/<slug>/conventions.md`
+
+   These artifacts are consumed by `/workflow` Step 1.5 (conventions reuse — skip rescan if `docs/harness/<slug>/conventions.md` exists) and `/workflow` Step 2 (planner dispatch fills `{qa_discovery_notes}` from `qa_notes.md` and `{critic_findings}` from `critic_findings.md`). Without persistence, `/workflow` falls back to its own Convention Scan and dispatches planners with empty Discovery Notes — producing less context-aware plans. Note: `.harness/conventions.md` is the shared file documented under the Step 1.5 ownership note; copying to `docs/harness/<slug>/` makes the snapshot durable across the spec→workflow handoff regardless of any subsequent /workflow Convention Scan run.
+
+4. **Cleanup:** Delete `.harness/` directory (state.json, `spec/`, `conventions.md`, and the directory itself). The final `docs/harness/<slug>/spec.md` AND the artifacts persisted in step 3 are preserved. (Halted sessions do NOT reach this step — see Halt semantics in Phase 2d-D.)
+
+5. **If has_git == false:** Do not attempt any git operations.
 
 ### Status Check (anytime)
 
