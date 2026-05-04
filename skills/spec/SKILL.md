@@ -309,10 +309,10 @@ Print status in the standard format, prefixed with `[harness] Spec draft ready.`
    - Model: if `model_config.preset != "default"`, use `model_config.advisor` for all four.
 
 6. Wait for all four to complete. **Failure handling per analyst (CM4):**
-   - Output file missing after dispatch → retry × 2 → if still missing, write a 1-line fallback to the expected path: `<persona> analysis written — no findings — dispatch failed`, and emit user warn `[harness] ⚠ <persona> dispatch failed after retries`.
-   - 1-line parse failure → treat as no-findings degraded-graceful + same warn.
+   - Output file missing after dispatch → retry × 2 → if still missing, write a 1-line fallback to the expected path: `<persona> analysis written — dispatch failed`, and emit user warn `[harness] ⚠ <persona> dispatch failed after retries`.
+   - 1-line parse failure → write a distinct fallback line `<persona> analysis written — parse failed` and emit warn `[harness] ⚠ <persona> 1-line parse failed`.
 
-7. **Empty-input contract check:** if all 4 analyst 1-lines contain `"no findings"`, set `state.critic = { applied: "approved", round: 0, last_findings_path: null }` and skip Phase 2c-D / 2d-D entirely (proceed to Final HARD-GATE).
+7. **Empty-input contract check:** if all 4 analyst 1-lines contain the literal sentinel `— no findings —` (em-dash, space, "no findings", space, em-dash) AND none contain `dispatch failed` or `parse failed`, set `state.critic = { applied: "approved", round: 0, last_findings_path: null }` and skip Phase 2c-D / 2d-D entirely (proceed to Final HARD-GATE). If any analyst 1-line contains `dispatch failed` or `parse failed`, infrastructure failure is suspected — do NOT skip Critic; instead proceed to Phase 2b-D Synthesis and Phase 2c-D Critic normally so the user can manually review. (CM4 fix)
 
 ##### Phase 2b-D: Synthesis (4 inputs + critic_findings)
 
@@ -352,10 +352,21 @@ Print status in the standard format, prefixed with `[harness] Spec draft ready.`
 3. Dispatch Critic sub-agent. Model: `model_config.advisor` (or default if preset == "default") — same pattern as Synthesis.
 
 4. **Failure handling:**
-   - Crash/timeout → retry × 2 → if still failing, set `critic.applied = "approved"`, `critic.round = 0` and emit warn `[harness] ⚠ Critic dispatch failed — proceeding without findings. Manual review recommended at Final HARD-GATE.` Skip to Final HARD-GATE.
-   - 1-line parse failure → treat as `Critical=0, Major=0, Minor=0` degraded-graceful + warn `[harness] ⚠ Critic 1-line parse failed — treating as no findings. critic_findings.md may have content; review manually.`
+   - Crash/timeout → retry × 2 → if still failing, set `critic.applied = "approved"`, `critic.round = 0`, `phase → "critic_complete"` and emit warn `[harness] ⚠ Critic dispatch failed — proceeding without findings. Manual review recommended at Final HARD-GATE.` Skip to Final HARD-GATE.
+   - 1-line parse failure → emit warn `[harness] ⚠ Critic 1-line parse failed — manual review required. critic_findings.md may have content; do NOT auto-approve.` Then present **Critic Parse-Fail Gate** via AskUserQuestion (translate header/question/options to `{user_lang}`):
 
-5. Parse 1-line: extract `Critical`, `Major`, `Minor` counts.
+     ```
+     header: "Critic"  (translate to user_lang)
+     question: "Critic 1-line parse failed. critic_findings.md may have content but counts are unknown. Manual review required."
+     options:  (translate label + description to user_lang)
+       - "Approve as-is" / "Open critic_findings.md, review manually, then proceed to Final HARD-GATE"
+       - "Stop" / "Halt — manual intervention needed"
+     ```
+
+     - Approve as-is → set `critic.applied = "approved"`, `critic.round = 0`, `phase → "critic_complete"`. Skip to Final HARD-GATE.
+     - Stop → halt session, leave state.json intact (no auto-approve on parse failure).
+
+5. Parse 1-line via regex `^critic_findings written — Critical=(\d+), Major=(\d+), Minor=(\d+)$`: extract three integer counts. Whitespace tolerance: allow `\s*` between tokens. Any deviation triggers the 1-line parse failure path in step 4.
 
 6. **Branching:**
    - `Critical=0 ∧ Major=0` → set `critic.applied = "approved"`, `critic.round = 0`, `phase → "critic_complete"`. Proceed to Final HARD-GATE (Minor count and findings file shown for context).
@@ -363,11 +374,11 @@ Print status in the standard format, prefixed with `[harness] Spec draft ready.`
 
    ```
    header: "Critic"  (translate to user_lang)
-   question: "Critic found {C} Critical, {M} Major, {m} Minor issues in the spec.
+   question: "Critic found <C_count> Critical, <M_count> Major, <m_count> Minor issues in the spec.
    ↳ Auto-revise: re-run synthesis once to address Critical/Major (Minor unchanged).
    ↳ Modify: tell me what to change manually (re-run synthesis with your input).
    ↳ Approve as-is: proceed to Final HARD-GATE with findings shown for review."
-   (translate question body to user_lang)
+   (orchestrator substitutes <C_count>/<M_count>/<m_count> with actual integer counts parsed from Critic 1-line; then translate question body to user_lang)
    options:  (translate label + description to user_lang)
      - "Auto-revise" / "Re-run synthesis with critic findings (max 1 round)"
      - "Modify" / "Provide modification instructions"
