@@ -46,7 +46,20 @@ When displaying status, read `.harness/state.json` and print (in `user_lang`):
   Branch   : <branch>                      ← omit if has_git == false
   Output   : <docs_path>
 ```
-Phase labels: `setup` → "Setup — initializing", `qa_active` → "Q&A — discovering requirements", `qa_complete` → "Q&A complete — ready for spec generation", `gen_ready` → "Generating specification", `spec_ready` → "Spec ready — awaiting approval", `convention_scan_active` → "Convention Scan — running", `critic_active` → "Critic — reviewing spec", `critic_complete` → "Critic complete — awaiting Final HARD-GATE", `re_synthesis_active` → "Re-synthesis — second round (Critic findings applied)", `re_critic_active` → "Re-critic — second round review", `critic_halted` → "Critic flow halted — manual intervention required", `completed` → "Completed"
+Phase labels (in roughly execution order):
+
+- `setup` → "Setup — initializing"
+- `convention_scan_active` → "Convention Scan — running"
+- `qa_active` → "Q&A — discovering requirements"
+- `qa_complete` → "Q&A complete — ready for spec generation"
+- `gen_ready` → "Generating specification"
+- `critic_active` → "Critic — reviewing spec"  (deep mode only)
+- `re_synthesis_active` → "Re-synthesis — second round (Critic findings applied)"  (deep mode only)
+- `re_critic_active` → "Re-critic — second round review"  (deep mode only)
+- `critic_complete` → "Critic complete — awaiting Final HARD-GATE"  (deep mode only)
+- `critic_halted` → "Critic flow halted — manual intervention required"  (terminal, deep mode only)
+- `spec_ready` → "Spec ready — awaiting approval"
+- `completed` → "Completed"
 
 ## Session Recovery
 
@@ -155,7 +168,7 @@ This step runs after Setup and before Phase 1 Q&A. It populates `state.conventio
 **`conventions` field contract** (mirrors workflow):
 - `null` → Step 1.5 not yet executed
 - `"skipped"` → user explicitly chose to skip
-- `"file:.harness/conventions.md"` → conventions copied locally; analysts inject via `{conventions}` variable
+- `"file:.harness/conventions.md"` → conventions copied locally; analysts inject via `{conventions}` variable. The `"file:"` prefix is a literal sentinel (NOT a URI scheme), and the orchestrator always emits the exact string `"file:.harness/conventions.md"` — no platform-specific path with embedded colons (e.g. Windows `C:\...`) is ever assigned to `state.conventions`, so prefix detection via `startswith("file:")` cannot collide with absolute paths.
 
 **Shared file ownership note** (NEW in 8.4 hardening): `.harness/conventions.md` is shared between `/spec` and `/workflow` skills (both write and read it via the same path). To prevent contract drift:
 - **Writer authority**: only the skill currently in its Step 1.5 phase (whichever ran most recently) is authoritative for the file's contents.
@@ -167,7 +180,7 @@ This step runs after Setup and before Phase 1 Q&A. It populates `state.conventio
 1. **`--reference` priority**: If `cli_flags.reference` is non-null and the file exists, copy its content to `.harness/conventions.md`, set `state.conventions → "file:.harness/conventions.md"`, and skip the rest of Step 1.5.
 
 2. **`has_git == true` branch** (mirrors workflow Step 1.5 logic — must be kept in sync if `/workflow` Step 1.5 changes; this is convention duplication, not code reuse):
-   - CLAUDE.md ≥ 50 lines → copy to `.harness/conventions.md`, set conventions accordingly.
+   - CLAUDE.md >= 50 lines → copy to `.harness/conventions.md`, set conventions accordingly.
    - CLAUDE.md sparse/missing → AskUserQuestion: `Scan / Skip`. If Scan, dispatch convention scanner sub-agent using template `{CLAUDE_PLUGIN_ROOT}/templates/planner/convention_scanner.md` (model: `model_config.advisor` or default). Verify file exists; on retry × 2 failure, fall back to `"skipped"`.
 
 3. **`has_git == false` branch** (NEW spec-only logic):
@@ -181,10 +194,10 @@ This step runs after Setup and before Phase 1 Q&A. It populates `state.conventio
      - `cwd/docs/conventions.md`
    - **Excluded directories (NEW in 8.4 hardening)**: even if a candidate path resolves through a symlink or junction into one of these, reject the match — `node_modules/`, `.git/`, `vendor/`, `dist/`, `build/`, `.next/`, `__pycache__/`, `.venv/`, `target/` (any path segment match).
    - **Symlink policy**: reject any candidate where `Path(p).is_symlink()` is true (skip with warn).
-   - Filter to files with ≥ 50 lines AND ≤ 5000 lines AND ≤ 200 KB (size cap mirrors `--reference`).
+   - Filter to files with >= 50 lines AND <= 5000 lines AND <= 200 KB (size cap mirrors `--reference`).
    - 0 matches → set `conventions → "skipped"`.
    - 1 match → copy content to `.harness/conventions.md`, set conventions accordingly.
-   - 2+ matches → AskUserQuestion with top-3 matches as options + 1 "Skip" option. On selection, copy chosen file. On Skip, set `conventions → "skipped"`.
+   - 2+ matches → rank matches by descending line count (more substantive files first); ties broken by the path priority order listed above (STYLE_GUIDE.md > CONTRIBUTING.md > conventions.md > guidelines.md > policy.md > docs/style-guide.md > docs/conventions.md). Present the top 3 ranked matches as AskUserQuestion options + 1 "Skip" option. On selection, copy chosen file. On Skip, set `conventions → "skipped"`.
 
 **Update phase:**
 - At entry: `phase → "convention_scan_active"`.
@@ -394,15 +407,15 @@ Print status in the standard format, prefixed with `[harness] Spec draft ready.`
 5. Parse 1-line via regex `^critic_findings written — Critical=(\d+), Major=(\d+), Minor=(\d+)$`: extract three integer counts. Whitespace tolerance: allow `\s*` between tokens. Any deviation triggers the 1-line parse failure path in step 4.
 
 6. **Branching:**
-   - `Critical=0 ∧ Major=0` → set `critic.applied = "approved"`, `critic.round = 0`, `phase → "critic_complete"`. Proceed to Final HARD-GATE (Minor count and findings file shown for context).
-   - `Critical≥1 ∨ Major≥1` → present **Critic Gate** via AskUserQuestion (3-way). **The orchestrator (this skill) constructs and translates the gate text — the Critic sub-agent does NOT generate AskUserQuestion content; it only writes `critic_findings.md` and emits the 1-line response.** Translate `header`, `question`, and option labels/descriptions to `{user_lang}` per [Communicate in user's language] policy. Issue ID prefixes (`[C*]`, `[M*]`, `[m*]`) and severity tokens (`Critical`, `Major`, `Minor`) stay English (canonical identifiers).
+   - `Critical=0 AND Major=0` → set `critic.applied = "approved"`, `critic.round = 0`, `phase → "critic_complete"`. Proceed to Final HARD-GATE (Minor count and findings file shown for context).
+   - `Critical>=1 OR Major>=1` → present **Critic Gate** via AskUserQuestion (3-way). **The orchestrator (this skill) constructs and translates the gate text — the Critic sub-agent does NOT generate AskUserQuestion content; it only writes `critic_findings.md` and emits the 1-line response.** Translate `header`, `question`, and option labels/descriptions to `{user_lang}` per [Communicate in user's language] policy. Issue ID prefixes (`[C*]`, `[M*]`, `[m*]`) and severity tokens (`Critical`, `Major`, `Minor`) stay English (canonical identifiers).
 
    ```
    header: "Critic"  (translate to user_lang)
    question: "Critic found <C_count> Critical, <M_count> Major, <m_count> Minor issues in the spec.
-   ↳ Auto-revise: re-run synthesis once to address Critical/Major (Minor unchanged).
-   ↳ Modify: tell me what to change manually (re-run synthesis with your input).
-   ↳ Approve as-is: proceed to Final HARD-GATE with findings shown for review."
+   > Auto-revise: re-run synthesis once to address Critical/Major (Minor unchanged).
+   > Modify: tell me what to change manually (re-run synthesis with your input).
+   > Approve as-is: proceed to Final HARD-GATE with findings shown for review."
    (orchestrator substitutes <C_count>/<M_count>/<m_count> with actual integer counts parsed from Critic 1-line; then translate question body to user_lang)
    options:  (translate label + description to user_lang)
      - "Auto-revise" / "Re-run synthesis with critic findings (max 1 round)"
@@ -441,8 +454,8 @@ This phase runs only when Critic Gate selected Auto-revise or Modify.
 3. Set `phase → "re_critic_active"`. Re-dispatch Phase 2c-D Critic on the revised spec.md. Set `critic.applied = "revised"`. (Distinct phase from `critic_active` so Session Recovery can route a 2d-D re-entry crash back to step 3, not step 1 of Phase 2c-D.)
 
 4. **2nd-round branching:**
-   - `Critical=0 ∧ Major=0` → set `critic.applied = "approved"`, `phase → "critic_complete"`. Proceed to Final HARD-GATE.
-   - `Critical≥1 ∨ Major≥1` AND `critic.round == 1` → present **2nd Critic Gate** (only Approve / Stop offered — no Re-revise to prevent oscillation). **Translate option labels/descriptions to `{user_lang}`** per [Communicate in user's language] policy.
+   - `Critical=0 AND Major=0` → set `critic.applied = "approved"`, `phase → "critic_complete"`. Proceed to Final HARD-GATE.
+   - `Critical>=1 OR Major>=1` AND `critic.round == 1` → present **2nd Critic Gate** (only Approve / Stop offered — no Re-revise to prevent oscillation). **Translate option labels/descriptions to `{user_lang}`** per [Communicate in user's language] policy.
 
    ```
    options:  (translate label + description to user_lang)

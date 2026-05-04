@@ -100,4 +100,4 @@ The placeholders `<C_count>`, `<M_count>`, `<m_count>` are NOT to be output lite
 
 No other text after the 1-line.
 
-(Note: parse failure fallback is orchestrator-set in `skills/spec/SKILL.md`, not Critic-generated — see Task 11.4 step 4.)
+(Parse-failure fallback gate is orchestrator-set in `skills/spec/SKILL.md` Phase 2c-D step 4 — not Critic-generated.)

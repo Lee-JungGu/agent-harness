@@ -77,14 +77,20 @@ Bulleted list. Each item: which Q&A is unconfirmed and what risks it creates.
 
 ## Output Contract
 
-CRITICAL: Your response must be EXACTLY ONE LINE in this format:
+CRITICAL: Your response must be EXACTLY ONE LINE.
+
+**Order of operations:** FIRST write your full analysis to `{output_path}` using the Write tool. ONLY AFTER the file write completes, emit the 1-line conversational response below.
+
+For normal completion (analysis written to file with substantive findings):
 ```
-risk_auditor analysis written — {output_path}
+risk_auditor analysis written
 ```
-For empty findings (Q&A all unconfirmed, etc.):
+
+For empty findings (Q&A all unconfirmed, no actionable risks identified):
 ```
 risk_auditor analysis written — no findings — input ambiguous
 ```
-No other text after the 1-line. Write all detailed analysis to the output file above.
 
-(Note: dispatch failure fallback is orchestrator-set in `skills/spec/SKILL.md`, not analyst-generated — see Task 11.2 step 6.)
+The orchestrator already knows `{output_path}` (it set it before dispatch) and reads the file directly; including the path in the 1-line is redundant. The literal sentinel `— no findings —` (em-dash, space, "no findings", space, em-dash) is what the orchestrator's empty-input contract checks for. No other text after the 1-line.
+
+(Dispatch-failure fallback line is orchestrator-set in `skills/spec/SKILL.md` Phase 2a-D step 6, not analyst-generated.)
