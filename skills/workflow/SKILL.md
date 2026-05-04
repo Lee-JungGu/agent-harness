@@ -431,6 +431,15 @@ If `model_config.verifier` is `sonnet` or `opus`, also print:
 
 *This step runs after Setup and before Plan, in all modes.*
 
+**Persisted Spec Artifacts Check (NEW in 8.4):**
+
+Before running CLAUDE.md richness check, look for `{docs_path}conventions.md` (persisted by /spec Phase 3 in slug-matched directory):
+
+- File exists → copy content to `.harness/conventions.md`, set `state.conventions → "file:.harness/conventions.md"`, skip the rich/sparse/missing trichotomy entirely. Proceed to Step 2 (Plan).
+- File does NOT exist → proceed with the existing CLAUDE.md richness flow below.
+
+**Resume idempotency:** if `state.conventions == "file:.harness/conventions.md"` but `.harness/conventions.md` is missing (e.g., `.harness/` was deleted), the persisted check re-copies from `{docs_path}conventions.md` if still present. **If both `.harness/conventions.md` AND `{docs_path}conventions.md` are missing**, reset `state.conventions = null` and fall through to the existing CLAUDE.md richness flow (treat as fresh execution — no convention context available).
+
 **CLAUDE.md Richness Check:**
 
 1. Check if `CLAUDE.md` exists in the repository root.
