@@ -282,32 +282,124 @@ Print status in the standard format, prefixed with `[harness] Spec draft ready.`
 
 #### If mode == "deep": Phase 2-D
 
-##### Phase 2a-D: Parallel Analysis
+##### Phase 2a-D: Parallel Analysis (4 analysts — was 2)
 
-1. Read two analyst templates from `{CLAUDE_PLUGIN_ROOT}/templates/spec/`: `requirements_analyst.md`, `user_scenario_analyst.md`
+1. Read four analyst templates from `{CLAUDE_PLUGIN_ROOT}/templates/spec/`:
+   - `requirements_analyst.md`
+   - `user_scenario_analyst.md`
+   - `risk_auditor.md` (NEW in 8.4)
+   - `tech_constraint_analyst.md` (NEW in 8.4)
+
 2. Read `qa_discovery_notes` from `.harness/spec/qa_notes.md`.
-3. For each analyst, fill template variables: `{task_description}` (original task), `{user_lang}`, `{qa_discovery_notes}` (full Q&A notes content), `{output_path}`:
-   - Requirements Analyst → `.harness/spec/analysis_requirements.md`
-   - User Scenario Analyst → `.harness/spec/analysis_scenarios.md`
-4. **Launch 2 subagents in parallel** using the Agent tool. Each receives its analyst template and has no knowledge of the other subagent (anchoring prevention). Each writes to its output_path.
-   If `model_config.preset` is not `"default"`:
-   - Requirements Analyst → advisor role
-   - User Scenario Analyst → advisor role
-5. Wait for both to complete. Verify both analysis files exist.
 
-##### Phase 2b-D: Synthesis
+3. Read `conventions` content: if `state.conventions` starts with `"file:"`, read the referenced file; if `null` or `"skipped"`, pass empty string.
+
+4. For each analyst, fill template variables:
+   - `{task_description}` (original task)
+   - `{user_lang}`
+   - `{qa_discovery_notes}` (full Q&A notes content)
+   - `{conventions}` (content from step 3, or empty string)
+   - `{output_path}`:
+     - Requirements Analyst → `.harness/spec/analysis_requirements.md`
+     - User Scenario Analyst → `.harness/spec/analysis_scenarios.md`
+     - Risk Auditor → `.harness/spec/analysis_risk.md`
+     - Tech Constraint Analyst → `.harness/spec/analysis_tech_constraint.md`
+
+5. **Launch 4 sub-agents in parallel** using the Agent tool. Each receives its analyst template and has no knowledge of other sub-agents (anchoring prevention). Each writes to its output_path.
+   - Model: if `model_config.preset != "default"`, use `model_config.advisor` for all four.
+
+6. Wait for all four to complete. **Failure handling per analyst (CM4):**
+   - Output file missing after dispatch → retry × 2 → if still missing, write a 1-line fallback to the expected path: `<persona> analysis written — no findings — dispatch failed`, and emit user warn `[harness] ⚠ <persona> dispatch failed after retries`.
+   - 1-line parse failure → treat as no-findings degraded-graceful + same warn.
+
+7. **Empty-input contract check:** if all 4 analyst 1-lines contain `"no findings"`, set `state.critic = { applied: "approved", round: 0, last_findings_path: null }` and skip Phase 2c-D / 2d-D entirely (proceed to Final HARD-GATE).
+
+##### Phase 2b-D: Synthesis (4 inputs + critic_findings)
 
 1. Read the synthesis template from `{CLAUDE_PLUGIN_ROOT}/templates/spec/synthesis.md`.
-2. Read both analysis files from Phase 2a-D.
-3. Fill template variables: `{task_description}`, `{user_lang}`, `{requirements_analysis}` (content of analysis_requirements.md), `{scenario_analysis}` (content of analysis_scenarios.md), `{spec_path}`: `docs/harness/<slug>/spec.md`
-4. Follow the synthesis rules to write `spec.md` to `docs/harness/<slug>/spec.md`.
-5. Update state.json: `phase` → `"spec_ready"`.
-6. Inform user (in `user_lang`):
+
+2. Read all four analysis files from Phase 2a-D.
+
+3. Read `critic_findings` content: if `.harness/spec/critic_findings.md` exists (re-synthesis path), read its content; otherwise pass empty string (first synthesis path).
+
+4. Fill template variables:
+   - `{task_description}`
+   - `{user_lang}`
+   - `{requirements_analysis}` (content of analysis_requirements.md)
+   - `{scenario_analysis}` (content of analysis_scenarios.md)
+   - `{risk_analysis}` (content of analysis_risk.md)
+   - `{tech_constraint_analysis}` (content of analysis_tech_constraint.md)
+   - `{critic_findings}` (content from step 3, or empty string)
+   - `{spec_path}`: `docs/harness/<slug>/spec.md`
+
+5. Dispatch synthesis sub-agent. Model: `model_config.advisor` (or default if preset == "default").
+
+6. Verify spec.md exists. After completion, proceed to Phase 2c-D (Critic), unless `state.critic.applied == "approved"` from Phase 2a-D empty-input contract (then skip to Final HARD-GATE).
+
+##### Phase 2c-D: Critic (NEW in 8.4)
+
+`phase → "critic_active"`.
+
+1. Read template `{CLAUDE_PLUGIN_ROOT}/templates/spec/critic.md`.
+
+2. Fill variables:
+   - `{task_description}`
+   - `{user_lang}`
+   - `{spec_content}` (content of `docs/harness/<slug>/spec.md`)
+   - `{qa_discovery_notes}`
+   - `{output_path}`: `.harness/spec/critic_findings.md`
+
+3. Dispatch Critic sub-agent. Model: `model_config.advisor` (or default if preset == "default") — same pattern as Synthesis.
+
+4. **Failure handling:**
+   - Crash/timeout → retry × 2 → if still failing, set `critic.applied = "approved"`, `critic.round = 0` and emit warn `[harness] ⚠ Critic dispatch failed — proceeding without findings. Manual review recommended at Final HARD-GATE.` Skip to Final HARD-GATE.
+   - 1-line parse failure → treat as `Critical=0, Major=0, Minor=0` degraded-graceful + warn `[harness] ⚠ Critic 1-line parse failed — treating as no findings. critic_findings.md may have content; review manually.`
+
+5. Parse 1-line: extract `Critical`, `Major`, `Minor` counts.
+
+6. **Branching:**
+   - `Critical=0 ∧ Major=0` → set `critic.applied = "approved"`, `critic.round = 0`, `phase → "critic_complete"`. Proceed to Final HARD-GATE (Minor count and findings file shown for context).
+   - `Critical≥1 ∨ Major≥1` → present **Critic Gate** via AskUserQuestion (3-way). **Translate `header`, `question`, and option labels/descriptions to `{user_lang}`** per [Communicate in user's language] policy. Issue ID prefixes (`[C*]`, `[M*]`, `[m*]`) and severity tokens (`Critical`, `Major`, `Minor`) stay English (canonical identifiers).
+
    ```
-   [harness] Spec draft ready.
-     Analyses : 2 specialists analyzed independently
-     Output   : spec.md synthesized
+   header: "Critic"  (translate to user_lang)
+   question: "Critic found {C} Critical, {M} Major, {m} Minor issues in the spec.
+   ↳ Auto-revise: re-run synthesis once to address Critical/Major (Minor unchanged).
+   ↳ Modify: tell me what to change manually (re-run synthesis with your input).
+   ↳ Approve as-is: proceed to Final HARD-GATE with findings shown for review."
+   (translate question body to user_lang)
+   options:  (translate label + description to user_lang)
+     - "Auto-revise" / "Re-run synthesis with critic findings (max 1 round)"
+     - "Modify" / "Provide modification instructions"
+     - "Approve as-is" / "Proceed without revision"
    ```
+
+   - **Auto-revise selected** → set `critic.applied = "pending"`, proceed to Phase 2d-D.
+   - **Modify selected** → collect modification instructions, set `critic.applied = "pending"`, proceed to Phase 2d-D (passing user instructions as additional context).
+   - **Approve as-is selected** → set `critic.applied = "approved"`, `phase → "critic_complete"`. Proceed to Final HARD-GATE with critic_findings.md path shown.
+
+##### Phase 2d-D: Re-synthesis (conditional, max 1 round normally; max 2 with 2nd gate)
+
+This phase runs only when Critic Gate selected Auto-revise or Modify.
+
+1. Re-dispatch Phase 2b-D Synthesis with same variable list, but now `{critic_findings}` is non-empty (read from `.harness/spec/critic_findings.md`). For Modify selection, append modification instructions to the prompt as a final `## User Modification Request` block.
+
+2. After re-synthesis completion: increment `critic.round` (`0 → 1`).
+
+3. Re-dispatch Phase 2c-D Critic on the revised spec.md. Set `critic.applied = "revised"`.
+
+4. **2nd-round branching:**
+   - `Critical=0 ∧ Major=0` → set `critic.applied = "approved"`, `phase → "critic_complete"`. Proceed to Final HARD-GATE.
+   - `Critical≥1 ∨ Major≥1` AND `critic.round == 1` → present **2nd Critic Gate** (only Approve / Stop offered — no Re-revise to prevent oscillation). **Translate option labels/descriptions to `{user_lang}`** per [Communicate in user's language] policy.
+
+   ```
+   options:  (translate label + description to user_lang)
+     - "Approve as-is" / "Re-revision still has issues. Proceed to Final HARD-GATE for manual review."
+     - "Stop" / "Halt — manual intervention needed."
+   ```
+
+   - Approve → `critic.applied = "approved"`, `phase → "critic_complete"`, Final HARD-GATE.
+   - Stop → halt session, leave state.json intact.
 
 ### HARD GATE — Spec Approval
 
