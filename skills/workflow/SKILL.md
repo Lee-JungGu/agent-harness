@@ -498,11 +498,21 @@ Update state.json: `phase → "plan_ready"`, `updated_at → now`.
 
 Print: `[harness] Phase: Plan`
 
+**Discovery Notes Injection (NEW in 8.4) — applies to all planner dispatches in single/standard/multi mode:**
+
+Before any planner sub-agent dispatch, prepare:
+- `qa_discovery_notes` = read content of `{docs_path}qa_notes.md` if exists, else empty string `""`.
+- `critic_findings` = read content of `{docs_path}critic_findings.md` if exists, else empty string `""`.
+
+When dispatching ANY planner template (`architect.md`, `senior_developer.md`, `qa_specialist.md`, `planner_single.md`), pass `{qa_discovery_notes}` and `{critic_findings}` as keyword variables (always — even when empty, to avoid `str.format()` KeyError on the new placeholders).
+
+Backward compat: pre-8.4 sessions where these files do not exist receive empty strings — templates render the `## Discovery Notes from Spec Phase` section with empty sub-bodies, which is harmless.
+
 #### Step 2 — single mode
 
 1. Update phase → `"planning"`.
 2. Read template: `{CLAUDE_PLUGIN_ROOT}/templates/planner/planner_single.md`
-3. **Dispatch 1 sub-agent** with prompt built from template variables: `{task_description}`, `{repo_path}`, `{lang}`, `{scope}`, `{user_lang}`, `{spec_path}` = `{docs_path}spec.md`.
+3. **Dispatch 1 sub-agent** with prompt built from template variables: `{task_description}`, `{repo_path}`, `{lang}`, `{scope}`, `{user_lang}`, `{qa_discovery_notes}`, `{critic_findings}`, `{spec_path}` = `{docs_path}spec.md`.
    - **Conventions injection:** If `conventions` in state.json starts with `"file:"`, extract the path after the prefix, read the file content, and pass as `{conventions}`. If `conventions` is `null`, `"skipped"`, or the referenced file does not exist, pass `{conventions}` as empty string.
    - Model: if preset ≠ "default", use `model_config.advisor`.
 4. Parse return → extract first line. Print: `  ✓ {first line}`
@@ -515,7 +525,7 @@ Print: `[harness] Phase: Plan`
 
 1. Update phase → `"planning"`.
 2. Read templates: `architect.md`, `senior_developer.md`
-3. **Dispatch 2 sub-agents in parallel.** Each gets: `{task_description}`, `{repo_path}`, `{lang}`, `{scope}`, `{user_lang}`, `{output_path}` = `.harness/planner/proposal_<persona>.md`.
+3. **Dispatch 2 sub-agents in parallel.** Each gets: `{task_description}`, `{repo_path}`, `{lang}`, `{scope}`, `{user_lang}`, `{qa_discovery_notes}`, `{critic_findings}`, `{output_path}` = `.harness/planner/proposal_<persona>.md`.
    - **Conventions injection:** If `conventions` starts with `"file:"`, read the file and pass as `{conventions}`. If `null`, `"skipped"`, or file missing, pass empty string.
    - Model: if preset ≠ "default", use `model_config.advisor`.
 4. Parse returns. Print: `  ✓ 2 proposals generated`
@@ -536,7 +546,7 @@ Print: `[harness] Phase: Plan`
 
 1. Update phase → `"planning"`.
 2. Read templates: `architect.md`, `senior_developer.md`, `qa_specialist.md`
-3. **Dispatch 3 sub-agents in parallel.** Each gets template vars + `{output_path}` = `.harness/planner/proposal_<persona>.md`.
+3. **Dispatch 3 sub-agents in parallel.** Each gets template vars + `{qa_discovery_notes}` + `{critic_findings}` + `{output_path}` = `.harness/planner/proposal_<persona>.md`.
    - **Conventions injection:** If `conventions` starts with `"file:"`, read the file and pass as `{conventions}`. If `null`, `"skipped"`, or file missing, pass empty string.
    - Model: if preset ≠ "default", use `model_config.advisor`.
 4. Parse returns. Print: `  ✓ 3 proposals generated`
