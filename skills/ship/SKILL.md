@@ -627,7 +627,9 @@ If "Manual" → update substep → `"git_branch_pushed"`, proceed to tag push.
 
 On success → update substep → `"git_branch_pushed"`.
 
-#### 6.5: Stage — merge_to_base (NEW in 8.4 / N2)
+#### 6.5: Stage — merge_to_base
+
+> Introduced in v8.4.0 (N2). Closes m14 — header version tag removed to avoid stale `(NEW in 8.4 / N2)` text in future versions; refer to CHANGELOG / ROADMAP for version history.
 
 This sub-stage merges the current release branch into `base_branch` BEFORE tag push, so the tag points to a commit reachable from `base_branch`. Closes the develop→main lag that occurred in 8.1.0/8.2.0/8.3.0 releases.
 
