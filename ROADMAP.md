@@ -2,6 +2,17 @@
 
 ## v8.x — Shipped
 
+**v8.4.0** — Spec Skill Hardening + /ship merge-to-base
+
+- **A+B+C+D — /spec Hardening**: Risk Auditor + Tech Constraint Analyst added to deep mode (4-analyst parallel synthesis), Spec Critic stage with 3-way gate + 1-round auto-revise, Convention Scan with `--reference` flag and has_git=false candidate file detection, qa_notes / critic_findings / conventions persistence to `{docs_path}` for slug-safe /spec → /workflow handoff (workflow Step 1.5 reuse, Step 2 variable injection into 4 planner templates, Step 8 cleanup protection).
+  Token cost (deep mode): measured at <TBD-after-implementation>x of base (estimated ~1.9x pre-implementation).
+  See: `skills/spec/SKILL.md`, `templates/spec/{risk_auditor,tech_constraint_analyst,critic,synthesis}.md`, `templates/planner/*.md`
+- **N2 — /ship Stage 6.5 merge_to_base**: Adds `develop → main` merge step before tag push (separate PR `harness/ship-merge-to-base` — added in companion plan if not yet merged). See `skills/ship/SKILL.md`.
+
+**Breaking changes**: deep mode persona count 2 → 4 + Critic; /spec Phase 3 handoff CLI contract gains `--output-dir`; planner templates gain `{qa_discovery_notes}` / `{critic_findings}` placeholders (forked custom templates may render empty Discovery Notes silently).
+
+---
+
 **v8.3.0** — Ship version_bump auto-detection for `.claude-plugin/*.json`
 
 - **N1 — `/ship` version_bump auto-detection for `.claude-plugin/*.json`**: Stage 2 (`version_bump`) now auto-detects version fields in `.claude-plugin/plugin.json` (top-level `$.version`) and `.claude-plugin/marketplace.json` (`$.metadata.version` + `$.plugins[*].version`) alongside the existing standard package manifests. Pass 2 uses JSON parsing on exact key paths to avoid regression where naive string replace would taint other fields (e.g., a `description` containing the same version string). Original line-ending (CRLF vs LF) and trailing-newline state are preserved.
