@@ -731,7 +731,7 @@ options:                      (translate description to user_lang; keep label En
      - "Skip Stage 6.5" / "Abort merge, base_branch lags release"
      - "Stop" / "Halt for manual intervention"
    ```
-   - **no-ff merge** → `git merge --no-ff {release_branch} -m "Merge release {release_version}"`. On conflict → halt with error message + recovery instructions ("`git merge --abort` then re-invoke /ship from Stage 6.5"). On success → proceed to step 5.
+   - **no-ff merge** → `git merge --no-ff {release_branch} -m "Merge release {release_version}"`. On conflict → execute `git merge --abort` (revert the in-progress merge so the working tree returns to clean state) then `git checkout {release_branch}` (HEAD is currently on `{base_branch}` from step 3 — return to release_branch so subsequent ad-hoc git commands by the user operate on the expected branch; halt on checkout failure with explicit error directing the user to `git checkout {release_branch}` manually) and halt with recovery instructions: "no-ff merge had conflicts. Resolve manually (e.g., merge `{base_branch}` into `{release_branch}` first, fix conflicts on `{release_branch}`, then re-invoke /ship from Stage 6.5; substep == `merge_base_pending` triggers re-execution from step 2 HARD-GATE)." `substep` retains `merge_base_pending` for resume. On success → proceed to step 5.
    - **rebase-then-ff** → AskUserQuestion sub-gate. **Note on current branch state**: at the moment this sub-gate is displayed, no git command has yet been executed for the rebase-then-ff path, so HEAD is still on `{base_branch}` (from step 3's checkout). Cancel preserves that state; Yes proceeds to the rebase pipeline below.
      ```
      header: "Confirm Rebase"   (translate to user_lang)
@@ -747,8 +747,8 @@ options:                      (translate description to user_lang; keep label En
      3. `git checkout {base_branch}` — switch back to base_branch for FF merge. On failure → halt with error and instruct user to manually `git checkout {base_branch}`.
      4. `git merge --ff-only {release_branch}` — should now succeed since release_branch was rebased onto base_branch. On failure (extremely unusual after a clean rebase) → halt with error.
      5. **Force-push release_branch to remote (REQUIRED — closes C3 tag-integrity gap)**: `git push --force-with-lease origin {release_branch}`. The `--force-with-lease` variant refuses to overwrite the remote if it has been updated by another party since the last fetch — safer than plain `--force`. On rejection (lease check failed → another commit was pushed to remote since 6c-i) → halt with error: "Remote `{release_branch}` was updated externally between 6c-i and Stage 6.5. Investigate the foreign commit (`git fetch origin {release_branch} && git log {release_branch}..origin/{release_branch}`), reconcile manually, then re-invoke /ship from Stage 6.5." On other failure → halt. On success → proceed to step 5.
-   - **Skip Stage 6.5** → `git checkout {release_branch}` (return to release branch) + same skip-warn as step 1, `substep → "merge_base_pushed"`, continue to 6c-ii.
-   - **Stop** → `git checkout {release_branch}` + halt.
+   - **Skip Stage 6.5** → `git checkout {release_branch}` (return to release branch — HEAD is currently on `{base_branch}` from step 3; halt with explicit error if checkout fails so the user can manually correct branch state before any tag operation runs at 6c-ii). Then issue the same skip-warn as step 2 HARD-GATE Skip, set `substep → "merge_base_pushed"`, continue to 6c-ii.
+   - **Stop** → `git checkout {release_branch}` (return to release branch; halt with explicit error if checkout fails, instructing the user to run `git checkout {release_branch}` manually before any further /ship invocation), then halt session. `substep` retains `merge_base_pending` for resume.
 
 5. **substep → `merge_base_done`**. **HARD-GATE** via AskUserQuestion:
    ```
