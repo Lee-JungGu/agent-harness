@@ -505,8 +505,10 @@ Print: `[harness] Phase: Plan`
 **Discovery Notes Injection (NEW in 8.4) — applies to all planner dispatches in single/standard/multi mode:**
 
 Before any planner sub-agent dispatch, prepare:
-- `qa_discovery_notes` = read content of `{docs_path}qa_notes.md` if exists, else empty string `""`.
-- `critic_findings` = read content of `{docs_path}critic_findings.md` if exists, else empty string `""`.
+- `qa_discovery_notes` = read content of `{docs_path}qa_notes.md`:
+  - File missing → empty string `""` (silent — pre-8.4 session or fresh /workflow run with no preceding /spec).
+  - **(s2) File exists but read fails** (permission, encoding, IO error) → warn user (in `user_lang`): "Failed to read `{docs_path}qa_notes.md`: <error>. Discovery Notes will be empty for planner injection." Then fall back to empty string `""` and proceed (do NOT abort the dispatch — empty Discovery Notes is harmless per the backward-compat note below).
+- `critic_findings` = read content of `{docs_path}critic_findings.md` using the same pattern (missing → empty silently; read failure → warn + empty fallback).
 
 When dispatching ANY planner template (`architect.md`, `senior_developer.md`, `qa_specialist.md`, `planner_single.md`), pass `{qa_discovery_notes}` and `{critic_findings}` as keyword variables (always — even when empty, to avoid `str.format()` KeyError on the new placeholders).
 

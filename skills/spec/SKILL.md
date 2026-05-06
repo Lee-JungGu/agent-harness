@@ -98,7 +98,7 @@ Before starting a new task, check if `.harness/state.json` already exists **and*
    - **Restart**: Delete `.harness/` directory and proceed to Step 1
    - **Stop**: Delete `.harness/` directory and halt
 
-**Backward compat (8.4)**: pre-8.4 state.json files lack the `cli_flags.reference`, `conventions`, and `critic` fields. Treat each as `null` default via the `state.get(field, null)` pattern (mirrors `/workflow`'s pre-v8.1 backward-compat policy in `skills/workflow/SKILL.md`). A pre-8.4 state.json reaching `qa_complete` and resuming under 8.4 will: (a) treat conventions as null and trigger a hard-error halt at Phase 2a-D step 3 (per single-source-of-truth contract), forcing the user to either Restart or fix conventions manually — this is intentional (we do NOT silently degrade pre-8.4 sessions through the 8.4 flow).
+**Backward compat (8.4)**: pre-8.4 state.json files lack the `cli_flags.reference`, `conventions`, and `critic` fields. Treat each as `null` default via the `state.get(field, null)` pattern. **(M9) Cross-skill policy asymmetry — intentional**: this `/spec` policy diverges from `/workflow`'s pre-v8.1 soft-default backward-compat policy in `skills/workflow/SKILL.md`. `/workflow` recovers missing fields silently and proceeds; `/spec` halts. Reason: 8.4 analyst injection requires `state.conventions` to be set (the 4-analyst Phase 2a-D pipeline depends on convention context for high-quality output), so silently degrading pre-8.4 sessions through the 8.4 flow would produce lower-quality specs without user awareness. A pre-8.4 state.json reaching `qa_complete` and resuming under 8.4 will: (a) treat conventions as null and trigger a hard-error halt at Phase 2a-D step 3 (per single-source-of-truth contract), forcing the user to either Restart or fix conventions manually — this halt is the intentional design, not a bug.
 
 If `.harness/state.json` does not exist (or `skill` field is not `"spec"`), proceed to Step 1 normally.
 
@@ -205,7 +205,7 @@ When the user provides a task description (via $ARGUMENTS or in conversation), e
 
 This step runs after Setup and before Phase 1 Q&A. It populates `state.conventions` for downstream analyst injection.
 
-**`conventions` field contract** (mirrors workflow):
+**`conventions` field contract** (mirrors workflow) — **(s3) canonical source for allowed values of `state.conventions`**; the state.json schema doc above (`conventions` field at line ~180) cross-references this section and gives a brief enumeration only — when changing allowed values, edit this section first, then mirror the brief enumeration in the schema doc:
 - `null` → Step 1.5 not yet executed
 - `"skipped"` → user explicitly chose to skip
 - `"file:.harness/conventions.md"` → conventions copied locally; analysts inject via `{conventions}` variable. The `"file:"` prefix is a literal sentinel (NOT a URI scheme), and the orchestrator always emits the exact string `"file:.harness/conventions.md"` — no platform-specific path with embedded colons (e.g. Windows `C:\...`) is ever assigned to `state.conventions`, so prefix detection via `startswith("file:")` cannot collide with absolute paths.
@@ -634,6 +634,8 @@ Sub-agents are used only in **deep mode**. Both sub-agents use the **advisor rol
 |-----------|------|---------|----------|----------|---------|
 | Requirements Analyst | advisor | (no override) | opus | opus | sonnet |
 | User Scenario Analyst | advisor | (no override) | opus | opus | sonnet |
+| Risk Auditor (NEW in 8.4) | advisor | (no override) | opus | opus | sonnet |
+| Tech Constraint Analyst (NEW in 8.4) | advisor | (no override) | opus | opus | sonnet |
 
 **Applying model config:** When launching any sub-agent, if `model_config.preset` is not `"default"`, pass the `model` parameter according to the table above. Sub-agents must NOT directly access state.json to read model_config — the orchestrator passes the model parameter at launch time.
 
