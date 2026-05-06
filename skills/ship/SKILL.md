@@ -602,7 +602,7 @@ Update state.json: `substep → "git_push_pending"`.
 <HARD-GATE>
 Ask via AskUserQuestion (in `user_lang`):
 - header: "Git Push"
-- question: "IRREVERSIBLE: This will push branch `{branch}` to remote `{remote}`, then run Stage 6.5 (merge_to_base — merges `{branch}` into `{base_branch}` and pushes `{base_branch}` UNLESS Stage 6.5 skip conditions match: `{branch} == {base_branch}` OR `{base_branch}` is null), then push tag `{tag_name}`. Branch and tag operations cannot be undone without force-push; Stage 6.5 has its own per-step HARD-GATEs with rollback documentation (concrete SHA captured at Stage 6.5 step 1 and surfaced in those gates — closes NF6: this top-level gate intentionally avoids citing an unresolved placeholder since pre_merge_sha is not yet captured at this point)."
+- question: "IRREVERSIBLE: This will push branch `{branch}` to remote `{remote}`, then run Stage 6.5 (merge_to_base — merges `{branch}` into `{base_branch}` and pushes `{base_branch}` UNLESS Stage 6.5 skip conditions match: `{branch} == {base_branch}` OR `{base_branch}` is null), then push tag `{tag_name}`. Branch and tag operations cannot be undone without force-push; Stage 6.5 has its own per-step HARD-GATEs with rollback documentation that includes the concrete SHA (captured at Stage 6.5 step 1)."
 - options:
   - "Push" / "Push branch, run Stage 6.5, push tag"
   - "Skip push" / "Skip all push operations (branch, base_branch, tag)"
