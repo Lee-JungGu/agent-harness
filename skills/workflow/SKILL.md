@@ -436,9 +436,38 @@ If `model_config.verifier` is `sonnet` or `opus`, also print:
 
 Before running CLAUDE.md richness check, look for `{docs_path}conventions.md` (persisted by /spec Phase 3 in slug-matched directory). **(m7)** `{docs_path}` is read from state.json (set by Step 1 step 7 — see §state.json schema).
 
-**(M2) Skip condition for resume**: If `state.conventions == "file:.harness/conventions.md"` AND `.harness/conventions.md` already exists (e.g., a prior /workflow session scanned conventions itself, then the session was paused and resumed), skip this entire Persisted Spec Artifacts Check and proceed directly to the existing CLAUDE.md richness flow below — the live `.harness/conventions.md` is authoritative for resumed /workflow sessions and must NOT be overwritten by a possibly-stale `/spec` copy.
+**Evaluation order (NEW in 8.4 v2 hardening — explicit decision tree to remove M2 vs Resume idempotency ambiguity):**
 
-Otherwise (fresh /workflow session, or `.harness/conventions.md` missing):
+```
+IF  state.conventions == "file:.harness/conventions.md"  THEN
+    IF  .harness/conventions.md exists  THEN
+        // (M2) Skip — live .harness/conventions.md is authoritative on /workflow resume.
+        skip Persisted Spec Artifacts Check entirely.
+        proceed to CLAUDE.md richness flow below.
+    ELSE  IF  {docs_path}conventions.md exists  THEN
+        // Resume idempotency — re-copy /spec snapshot.
+        copy {docs_path}conventions.md → .harness/conventions.md.
+        proceed to Step 2 (Plan) — skip rich/sparse/missing trichotomy.
+    ELSE
+        // Both files missing — reset state and fall through.
+        state.conventions = null  (atomic single-write).
+        proceed to CLAUDE.md richness flow below (treat as fresh execution).
+    END
+ELIF  state.conventions IN { null, "skipped" }  THEN
+    // Fresh /workflow session OR explicitly skipped — fall through.
+    IF  {docs_path}conventions.md exists  THEN
+        copy {docs_path}conventions.md → .harness/conventions.md.
+        set state.conventions = "file:.harness/conventions.md".
+        proceed to Step 2 (Plan).
+    ELSE
+        proceed to CLAUDE.md richness flow below.
+    END
+END
+```
+
+**(M2) Skip condition for resume** (covered by the first IF branch above): If `state.conventions == "file:.harness/conventions.md"` AND `.harness/conventions.md` already exists (e.g., a prior /workflow session scanned conventions itself, then the session was paused and resumed), skip this entire Persisted Spec Artifacts Check and proceed directly to the existing CLAUDE.md richness flow below — the live `.harness/conventions.md` is authoritative for resumed /workflow sessions and must NOT be overwritten by a possibly-stale `/spec` copy.
+
+Otherwise (fresh /workflow session, or `.harness/conventions.md` missing — see decision tree above):
 
 - File `{docs_path}conventions.md` exists → copy content to `.harness/conventions.md`, set `state.conventions → "file:.harness/conventions.md"`, skip the rich/sparse/missing trichotomy entirely. Proceed to Step 2 (Plan).
 - File `{docs_path}conventions.md` does NOT exist → proceed with the existing CLAUDE.md richness flow below.

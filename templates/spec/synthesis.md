@@ -37,7 +37,7 @@ Write all output in **{user_lang}**. All section headings and content in the fin
 ### Critic Findings
 {critic_findings}
 
-(If `Critic Findings` is empty, this is the first synthesis. If non-empty, this is a revision — address each `[C*]`/`[M*]` item in the spec below.)
+<!-- Synthesis sub-agent meta-instruction (do NOT include in the spec output): if `Critic Findings` is empty, this is the first synthesis. If non-empty, this is a revision — address each `[C*]`/`[M*]` item in the spec below. Parenthetical or HTML-commented meta-instructions in this template are NOT part of the spec.md you produce; they are routing hints for you, the Synthesis sub-agent. -->
 
 ## Instructions
 
