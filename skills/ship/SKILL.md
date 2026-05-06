@@ -201,6 +201,9 @@ If `.harness/state.json` does not exist, proceed to Step 1.
 - `"git_tag_done"` — tag created successfully
 - `"git_push_pending"` — about to push
 - `"git_branch_pushed"` — branch pushed, tag push pending
+- `"merge_base_pending"` — Stage 6.5 entered, awaiting pre-merge HARD-GATE
+- `"merge_base_done"` — local merge succeeded, awaiting push HARD-GATE
+- `"merge_base_pushed"` — base_branch push completed, ready for 6c-ii tag push
 - `"git_push_done"` — both branch and tag pushed
 
 ---
