@@ -607,6 +607,167 @@ If "Manual" → update substep → `"git_branch_pushed"`, proceed to tag push.
 
 On success → update substep → `"git_branch_pushed"`.
 
+#### 6.5: Stage — merge_to_base (NEW in 8.4 / N2)
+
+This sub-stage merges the current release branch into `base_branch` BEFORE tag push, so the tag points to a commit reachable from `base_branch`. Closes the develop→main lag that occurred in 8.1.0/8.2.0/8.3.0 releases.
+
+**Variable conventions (Stage 6.5 scope):**
+- `release_branch` ≡ `state.branch` — the branch ship was invoked on (single source of truth — both names refer to the persisted state).
+- `base_branch` ≡ `state.base_branch` — auto-detected (or user-supplied) merge target (e.g., `main`).
+- `current_branch` is used ONLY inside the entry guard below (live `git` query result, compared against `state.branch` to detect mid-session branch switches).
+
+**i18n policy (applies to all AskUserQuestion gates in this section):** `header`, `question`, and option `description` strings translate to `{user_lang}` per [Communicate in user's language] policy. Option `label` strings (the canonical action keys quoted below — e.g., `"Proceed"`, `"Skip Stage 6.5"`, `"Retry"`) stay English so downstream substep transitions can match on stable identifiers.
+
+**Skip conditions** (evaluated at entry — both bypass Stage 6.5 entirely and proceed directly to 6c-ii tag push):
+- `state.branch == base_branch` (already on base — nothing to merge)
+- `base_branch == null` (auto-detect failed at Setup, no user-supplied value)
+
+If neither skip condition matches, proceed below.
+
+**Entry guard — branch re-detection** (CM7):
+
+```bash
+git rev-parse --abbrev-ref HEAD
+```
+
+Compare result (`current_branch`) to `state.branch`. On mismatch → halt with error: `Current branch changed mid-session ({state.branch} → {current_branch}). Switch back to {state.branch} and re-invoke /ship, OR Restart from Stage 1.` (state.json `substep` retains current value for resume.)
+
+**Branch protection pre-check** (CC5):
+
+```bash
+gh api repos/:owner/:repo/branches/{base_branch}/protection
+```
+
+(stderr captured separately — do NOT use `2>/dev/null` so the agent can inspect HTTP status for branching below.)
+
+Conditions for skipping the API call entirely (treat as `unknown`):
+- `state.has_gh == false` (gh not installed)
+- `state.has_gh_auth == false` (gh not authenticated)
+
+Exit code interpretation:
+- **exit 0** → protection rules are configured for `{base_branch}`. Treat as **protected** → Path A.
+- **exit ≠ 0 with HTTP 404 in error output** → no protection configured (this is the normal unprotected branch case). Treat as **unprotected** → Path B (Standard merge path).
+- **exit ≠ 0 with HTTP 403 / 401 in error output** → permission denied (token lacks `repo` scope or branch is in a private repo not accessible). Treat as **unknown** → Path B (Standard merge path; rejection — if any — handled at step 7).
+- **exit ≠ 0 with HTTP 5xx / network error** → transient failure. Treat as **unknown** → Path B.
+- **API call skipped (gh missing/unauthenticated)** → **unknown** → Path B.
+
+All `unknown` and `unprotected` cases converge on Path B. Path B step 7's push-rejection 5-way gate is the safety net — if `{base_branch}` is actually protected but the API check missed it, push will be rejected and the user can choose Create PR / Manual / Skip / Stop / Retry from there.
+
+**A. Protected branch path** — direct push known to be rejected; do not attempt local merge:
+
+`AskUserQuestion`:
+```
+header: "Protected Base"     (translate to user_lang)
+question: "Base branch `{base_branch}` is protected — direct push will be rejected. Open a PR instead?"
+                              (translate to user_lang)
+options:                      (translate description to user_lang; keep label English)
+  - "Create PR" / "Open PR via gh pr create --base {base_branch} --head {release_branch}"
+  - "Skip Stage 6.5" / "Skip merge — base_branch will lag this release. Tag still pushes."
+  - "Stop" / "Halt for manual intervention"
+```
+- **Create PR** → execute `gh pr create --base {base_branch} --head {release_branch} --title "Release {release_version}"`. On success → `substep → "merge_base_pushed"` (treating PR creation as the "push" equivalent — tag still pushes to release_branch lineage). On failure → re-display gate. Continue to 6c-ii.
+- **Skip Stage 6.5** → `substep → "merge_base_pushed"`, warn user that base_branch will lag this release, continue to 6c-ii.
+- **Stop** → halt session.
+
+**B. Standard merge path** (no detected protection or status unknown):
+
+1. **substep → `merge_base_pending`**. **HARD-GATE (CM9)** via AskUserQuestion:
+   ```
+   header: "Merge to Base"     (translate to user_lang)
+   question: "About to merge `{release_branch}` → `{base_branch}` (local merge — irreversible without `git reset --hard {pre_merge_sha}` on `{base_branch}` to undo). Proceed?"
+                                (translate to user_lang)
+   options:                     (translate description to user_lang; keep label English)
+     - "Proceed" / "Run git merge"
+     - "Skip Stage 6.5" / "Skip merge — base_branch will lag this release. Tag still pushes."
+     - "Stop" / "Halt for manual intervention"
+   ```
+   - Skip → `substep → "merge_base_pushed"` + warn `[ship] ⚠ base_branch ({base_branch}) will not contain release commits — tag will not be reachable from {base_branch}.` Continue to 6c-ii tag push.
+   - Stop → halt session.
+
+2. **Capture pre_merge_sha** (B6 — for rollback message). **Capture the `base_branch` HEAD sha BEFORE checkout, regardless of which branch is currently checked out:**
+   ```bash
+   pre_merge_sha=$(git rev-parse {base_branch})
+   ```
+   This MUST resolve to the base_branch's tip — if it resolved to the release_branch HEAD instead (i.e., used `git rev-parse HEAD` while still on release_branch), the rollback `git reset --hard {pre_merge_sha}` on base_branch would JUMP base_branch FORWARD to the release HEAD instead of reverting it, which is the opposite of recovery. Verify the resolution succeeded (non-empty 40-char hex) before proceeding.
+
+   Store in state.json: `state.stage_results.merge_to_base.pre_merge_sha = "{pre_merge_sha}"`.
+
+3. **Switch to base_branch and attempt FF merge:**
+   ```bash
+   git checkout {base_branch}
+   git merge --ff-only {release_branch}
+   ```
+   - Success → proceed to step 5.
+   - Non-FF (the merge --ff-only fails) → proceed to step 4.
+
+4. **Non-FF resolution** via AskUserQuestion:
+   ```
+   header: "Non-FF Merge"       (translate to user_lang)
+   question: "FF merge not possible — `{base_branch}` has commits not in `{release_branch}`. Choose merge strategy:"
+                                 (translate to user_lang)
+   options:                      (translate description to user_lang; keep label English)
+     - "no-ff merge" / "Create explicit merge commit (preserves both histories)"
+     - "rebase-then-ff" / "Rebase {release_branch} onto {base_branch}, then FF (rewrites release history)"
+     - "Skip Stage 6.5" / "Abort merge, base_branch lags release"
+     - "Stop" / "Halt for manual intervention"
+   ```
+   - **no-ff merge** → `git merge --no-ff {release_branch} -m "Merge release {release_version}"`. On conflict → halt with error message + recovery instructions ("`git merge --abort` then re-invoke /ship from Stage 6.5"). On success → proceed to step 5.
+   - **rebase-then-ff** → AskUserQuestion sub-gate:
+     ```
+     header: "Confirm Rebase"   (translate to user_lang)
+     question: "Rebase rewrites {release_branch} history. If {release_branch} was already pushed, force-push will be required after Stage 6.5. Continue?"
+                                (translate to user_lang)
+     options:                   (translate description to user_lang; keep label English)
+       - "Yes" / "Run rebase then FF merge"
+       - "Cancel" / "Return to merge strategy selection"
+     ```
+     On Yes: `git checkout {release_branch} && git rebase {base_branch} && git checkout {base_branch} && git merge --ff-only {release_branch}`. On Cancel → return to step 4 options. On rebase conflict → halt.
+   - **Skip Stage 6.5** → `git checkout {release_branch}` (return to release branch) + same skip-warn as step 1, `substep → "merge_base_pushed"`, continue to 6c-ii.
+   - **Stop** → `git checkout {release_branch}` + halt.
+
+5. **substep → `merge_base_done`**. **HARD-GATE** via AskUserQuestion:
+   ```
+   header: "Push Base"          (translate to user_lang)
+   question: "Local merge succeeded. About to push `{base_branch}` to remote. Proceed?"
+                                 (translate to user_lang)
+   options:                      (translate description to user_lang; keep label English)
+     - "Push" / "Run git push origin {base_branch}"
+     - "Stop" / "Halt — base_branch updated locally only. Run `git push origin {base_branch}` manually later."
+   ```
+
+6. **Push base_branch**:
+   ```bash
+   git push origin {base_branch}
+   ```
+
+7. **Push outcome handling**:
+   - Success → `substep → "merge_base_pushed"`. `git checkout {release_branch}` (return to release branch — tag push in 6c-ii operates on release_branch). Proceed to 6c-ii.
+   - Rejection (branch protection or other) → AskUserQuestion (5-way, mirroring 6c-i pattern + new "Create PR" option):
+     ```
+     header: "Push Rejected"     (translate to user_lang)
+     question: "Push to {base_branch} rejected. Reason: {git error message}. Choose:"
+                                  (translate to user_lang)
+     options:                     (translate description to user_lang; keep label English)
+       - "Retry" / "Try push again (network or transient)"
+       - "Manual" / "I'll push manually — mark as done"
+       - "Create PR" / "Open PR via gh: gh pr create --base {base_branch} --head {release_branch}"
+       - "Skip Stage 6.5" / "Reset local merge, base_branch lags release"
+       - "Stop" / "Halt for manual intervention"
+     ```
+     - **Retry** → re-run step 6. Track a `retry_count` (initialized to 0 on first gate display, incremented on each Retry click). When `retry_count >= 2`, on the next gate display **disable the Retry option** (omit it from `options`) and the user must choose Manual / Create PR / Skip / Stop. Rationale: 2 transient failures in a row strongly signal a non-transient cause (auth, protection, etc.); forcing a different choice prevents infinite retry loops.
+     - **Manual** → `substep → "merge_base_pushed"`, `git checkout {release_branch}`, continue to 6c-ii.
+     - **Create PR** → execute `gh pr create --base {base_branch} --head {release_branch} --title "Release {release_version}"`. On success → `substep → "merge_base_pushed"`, `git checkout {release_branch}`, continue to 6c-ii. On failure → return to gate.
+     - **Skip Stage 6.5** → execute `git reset --hard {pre_merge_sha}` on `{base_branch}` (rollback the local merge — `pre_merge_sha` refers to `{base_branch}`'s pre-merge tip per step 2's capture, NOT the release_branch HEAD), `git checkout {release_branch}`, `substep → "merge_base_pushed"`, warn user, continue to 6c-ii.
+     - **Stop** → halt session (state.json preserved — `substep == "merge_base_done"` enables resume from step 5 HARD-GATE).
+
+**Rollback documentation** (always shown in Stage 6.5 prompts that involve merge):
+
+> "If you reject the post-merge push or want to undo Stage 6.5 entirely, run:
+> `git checkout {base_branch} && git reset --hard {pre_merge_sha}`
+> on `{base_branch}` to revert to pre-merge state. The `pre_merge_sha` is stored in `state.json` at `stage_results.merge_to_base.pre_merge_sha` and refers to the base_branch tip BEFORE the merge."
+
+After Stage 6.5 completes (success path or skip path), proceed to 6c-ii tag push (existing behavior, unchanged).
+
 **6c-ii: Push tag** (only if `tag_name` is not null):
 Execute: `git push origin {tag_name}`
 
