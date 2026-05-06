@@ -158,6 +158,8 @@ Stage resume map (with substep details):
 
 If `.harness/state.json` does not exist, proceed to Step 1.
 
+**State consistency check (closes m12)**: on resume, before applying the jump-table mapping, verify that `current_stage` and `substep` are mutually consistent. The 6.5-substep group (`merge_base_pending` / `merge_base_done` / `merge_base_pushed`) is valid ONLY when `current_stage == "git_ops"`. If a corrupted or hand-edited state.json presents an inconsistent pairing (e.g., `current_stage == "gh_release"` with `substep == "merge_base_done"`) → halt with a clear error: `state.json is inconsistent: current_stage='{current_stage}' but substep='{substep}'. Inspect .harness/state.json manually, or Restart from Stage 1.` Do NOT auto-recover; the safest path is to surface the inconsistency to the user.
+
 ---
 
 ## state.json Schema
@@ -186,7 +188,12 @@ If `.harness/state.json` does not exist, proceed to Step 1.
   "current_stage": "qa",
   "substep": null,
   "stage_results": {
-    "version_bump_files": []
+    "version_bump_files": [],
+    "merge_to_base": {                  // initialized at Setup; populated by Stage 6.5 (closes m3)
+      "pre_merge_sha": null,            // null on Path A (no local merge); 40-char hex on Path B after step 1 capture
+      "path_a_pr_url": null,            // populated by Path A on Create PR success or existing-PR reuse
+      "push_retry_count": 0             // persisted retry counter for Stage 6.5 step 7 (closes M4)
+    }
   },
   "docs_path": "docs/harness/ship-<slug>/",  // ship uses "ship-" prefix to namespace artifacts separately from workflow's "docs/harness/<slug>/"
   "created_at": "<ISO8601>",
@@ -194,19 +201,28 @@ If `.harness/state.json` does not exist, proceed to Step 1.
 }
 ```
 
-**substep** tracks intra-stage progress for recovery. Valid values (exhaustive enum):
-- `null` — no substep active
+**substep** tracks intra-stage progress for recovery. Valid values (exhaustive enum, grouped by stage — closes s1):
+
+`null` — no substep active
+
+**version_bump stage:**
 - `"version_bump_pass1_done"` — version references detected, awaiting HARD-GATE
 - `"version_bump_pass2_done"` — version files updated, stage complete
+
+**git_ops stage — 6a (Commit) / 6b (Tag) / 6c (Push):**
 - `"git_commit_pending"` — about to commit (staging may be incomplete)
 - `"git_commit_done"` — commit created successfully
 - `"git_tag_pending"` — about to create tag
 - `"git_tag_done"` — tag created successfully
 - `"git_push_pending"` — about to push
 - `"git_branch_pushed"` — branch pushed, tag push pending
+
+**git_ops stage — 6.5 (merge_to_base sub-stage, NEW in 8.4):**
 - `"merge_base_pending"` — Stage 6.5 entered. For Path B: pre_merge_sha captured in state.json, awaiting pre-merge HARD-GATE (step 2). For Path A: idempotency check (A.1) passed, awaiting protected-base gate (A.3). Resume from this substep is safe in both paths.
 - `"merge_base_done"` — Path B only: local merge into base_branch succeeded, awaiting push HARD-GATE (step 5).
 - `"merge_base_pushed"` — terminal state for Stage 6.5; covers ALL of: (a) Path B step 7 base_branch push completed, (b) Path A `gh pr create` succeeded (PR replaces direct push), (c) Path A "Skip Stage 6.5" chosen, (d) Path B step 2 HARD-GATE "Skip Stage 6.5" chosen, (e) Path B step 4 Non-FF "Skip Stage 6.5" chosen, (f) Path B step 7 push-rejection "Skip Stage 6.5" chosen, (g) entry-level Skip conditions (`state.branch == base_branch` OR `base_branch == null`). All paths converge on this substep before 6c-ii tag push. The name is push-centric for historical reasons; semantically it means "Stage 6.5 is done — proceed to tag push regardless of whether merge actually happened".
+
+**git_ops stage — 6c-ii (Tag push) terminal:**
 - `"git_push_done"` — both branch and tag pushed
 
 ---
@@ -616,14 +632,14 @@ On success → update substep → `"git_branch_pushed"`.
 This sub-stage merges the current release branch into `base_branch` BEFORE tag push, so the tag points to a commit reachable from `base_branch`. Closes the develop→main lag that occurred in 8.1.0/8.2.0/8.3.0 releases.
 
 **Variable conventions (Stage 6.5 scope):**
-- `release_branch` ≡ `state.branch` — the branch ship was invoked on (single source of truth — both names refer to the persisted state).
+- `release_branch` ≡ `state.branch` — the branch ship was invoked on (single source of truth — both names refer to the persisted state). **This is the same value that 6c-i refers to as `{branch}`** (e.g., `git push origin {branch}` at line 598); the rename to `release_branch` inside Stage 6.5 is purely for clarity when the prose discusses both branches simultaneously, not a different variable.
 - `base_branch` ≡ `state.base_branch` — auto-detected (or user-supplied) merge target (e.g., `main`).
 - `current_branch` is used ONLY inside the entry guard below (live `git` query result, compared against `state.branch` to detect mid-session branch switches).
 
 **i18n policy (applies to all AskUserQuestion gates in this section):** `header`, `question`, and option `description` strings translate to `{user_lang}` per [Communicate in user's language] policy. Option `label` strings (the canonical action keys quoted below — e.g., `"Proceed"`, `"Skip Stage 6.5"`, `"Retry"`) stay English so downstream substep transitions can match on stable identifiers.
 
 **Skip conditions** (evaluated at entry — both bypass Stage 6.5 entirely and proceed directly to 6c-ii tag push):
-- `state.branch == base_branch` (already on base — nothing to merge)
+- `state.branch == base_branch` (already on base — nothing to merge). **Comparison is exact-string** (git refs are case-sensitive on Linux/macOS, and even on case-insensitive filesystems the recorded value is the canonical form returned by `git rev-parse --abbrev-ref` at Setup, so `Main` vs `main` would only diverge if the user manually overrode the value with mismatched casing). If you suspect the user typed a divergent-case branch name during Setup's `base_branch` input prompt, an additional defensive check is `git rev-parse refs/heads/{state.branch}` vs `git rev-parse refs/heads/{base_branch}` — equal SHAs imply the same branch tip regardless of name casing (closes s2). The string-equality check below is the primary; the SHA-equality check is optional defensive.
 - `base_branch == null` (auto-detect failed at Setup, no user-supplied value)
 
 **On either skip-condition match**: set `substep → "merge_base_pushed"` (so the jump table maps a resumed session consistently to 6c-ii rather than re-entering Stage 6.5), keep `current_stage == "git_ops"` unchanged, and proceed to 6c-ii. This makes the entry-skip path symmetric with Path A and the HARD-GATE Skip path (both of which also land on `merge_base_pushed`).
@@ -642,9 +658,13 @@ Compare result (`current_branch`) to `state.branch`. On mismatch → halt with e
 
 **Branch protection pre-check** (CC5):
 
+Before running the API call, **re-validate `{base_branch}`** against the strict pattern `^[a-zA-Z0-9/_.-]+$` (the same pattern used for `branch` at line 577). The original `base_branch` value comes from auto-detection (`main`/`master`) or from a free-text user input at Step 1, and the user-input path does not enforce the pattern at the source. Re-validating here closes a URL-injection vector: a value containing `..`, spaces, `?`, `#`, or path separators outside the allowed set could traverse or rewrite the API request URL. On pattern mismatch → halt with error: `Invalid base_branch '{base_branch}' — must match ^[a-zA-Z0-9/_.-]+$. Restart /ship and provide a valid branch name.` (closes m1 / Sec N3)
+
 ```bash
 gh api repos/:owner/:repo/branches/{base_branch}/protection
 ```
+
+The `:owner/:repo` literal is a `gh` CLI placeholder — `gh api` resolves it to the current repository's `OWNER/REPO` automatically from the configured git remote, equivalent to passing `--repo "$(gh repo view --json nameWithOwner -q .nameWithOwner)"`. Do NOT replace it with literal owner/repo strings here unless you intend to target a different repository.
 
 (stderr captured separately — do NOT use `2>/dev/null` so the agent can inspect HTTP status for branching below.)
 
@@ -717,10 +737,10 @@ options:                      (translate description to user_lang; keep label En
    git checkout {base_branch}
    git merge --ff-only {release_branch}
    ```
-   - Success → proceed to step 5.
-   - Non-FF (the merge --ff-only fails) → proceed to step 4.
+   - **Success → SKIP step 4 entirely, proceed directly to step 5.** (Step 4 is the Non-FF resolution gate; it must NOT be displayed when FF merge already succeeded.)
+   - Non-FF (the `git merge --ff-only` command fails because `{base_branch}` has commits not present in `{release_branch}`) → proceed to step 4.
 
-4. **Non-FF resolution** via AskUserQuestion:
+4. **Non-FF resolution** (entered ONLY when step 3's `git merge --ff-only` failed; if step 3 succeeded the agent must skip this entire step) via AskUserQuestion:
    ```
    header: "Non-FF Merge"       (translate to user_lang)
    question: "FF merge not possible — `{base_branch}` has commits not in `{release_branch}`. Choose merge strategy:"
