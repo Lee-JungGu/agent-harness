@@ -204,9 +204,9 @@ If `.harness/state.json` does not exist, proceed to Step 1.
 - `"git_tag_done"` — tag created successfully
 - `"git_push_pending"` — about to push
 - `"git_branch_pushed"` — branch pushed, tag push pending
-- `"merge_base_pending"` — Stage 6.5 entered, awaiting pre-merge HARD-GATE
-- `"merge_base_done"` — local merge succeeded, awaiting push HARD-GATE
-- `"merge_base_pushed"` — base_branch push completed, ready for 6c-ii tag push
+- `"merge_base_pending"` — Stage 6.5 entered. For Path B: pre_merge_sha captured in state.json, awaiting pre-merge HARD-GATE (step 2). For Path A: idempotency check (A.1) passed, awaiting protected-base gate (A.3). Resume from this substep is safe in both paths.
+- `"merge_base_done"` — Path B only: local merge into base_branch succeeded, awaiting push HARD-GATE (step 5).
+- `"merge_base_pushed"` — terminal state for Stage 6.5; covers ALL of: (a) Path B step 7 base_branch push completed, (b) Path A `gh pr create` succeeded (PR replaces direct push), (c) Path A "Skip Stage 6.5" chosen, (d) Path B step 2 HARD-GATE "Skip Stage 6.5" chosen, (e) Path B step 4 Non-FF "Skip Stage 6.5" chosen, (f) Path B step 7 push-rejection "Skip Stage 6.5" chosen, (g) entry-level Skip conditions (`state.branch == base_branch` OR `base_branch == null`). All paths converge on this substep before 6c-ii tag push. The name is push-centric for historical reasons; semantically it means "Stage 6.5 is done — proceed to tag push regardless of whether merge actually happened".
 - `"git_push_done"` — both branch and tag pushed
 
 ---
@@ -577,9 +577,11 @@ Update state.json: `substep → "git_push_pending"`.
 **Input validation:** Verify `branch` matches `^[a-zA-Z0-9/_.-]+$` and `tag_name` (if not null) matches `^(v[0-9a-zA-Z][0-9a-zA-Z._-]{0,252}|[0-9a-zA-Z][0-9a-zA-Z._-]{0,253})$` (strict 254-char hard cap regardless of optional `v` prefix; alternation prevents the `v?` + 254 trailing case from inflating to 255 chars). If either fails → print error, halt (state corruption).
 
 **Recovery check:** If resuming from `git_push_pending` or `git_branch_pushed`:
-- Check if branch already pushed: `git log origin/{branch}..{branch} --oneline` — if empty, branch is up-to-date → skip to tag push.
+- Check if branch already pushed: `git log origin/{branch}..{branch} --oneline` — if empty, branch is up-to-date → update `substep → "git_branch_pushed"` and **route to Stage 6.5 entry** (NOT directly to tag push). Stage 6.5 must run between branch push and tag push so the tag is reachable from `base_branch`; bypassing it would re-introduce the develop→main lag this stage was added to fix. Stage 6.5's own Skip-condition evaluation at entry handles the `state.branch == base_branch` and `base_branch == null` cases that legitimately bypass the merge.
 - Check if tag already pushed: `git ls-remote origin refs/tags/{tag_name}` — if non-empty, tag exists on remote → skip tag push.
 - Skip already-completed operations and update substep accordingly.
+
+> **Note on Recovery check vs jump table interaction (closes M1)**: this Recovery check runs at Step 6c entry. The jump table at the top of this file routes `substep == "git_branch_pushed"` to "Stage 6.5 entry" — that mapping is consistent with the bullet above (which also routes to Stage 6.5 entry). The earlier 8.4 draft of this Recovery check routed `git_branch_pushed` directly to tag push, which conflicted with the jump table; that direct-to-tag route has been removed.
 
 <HARD-GATE>
 Ask via AskUserQuestion (in `user_lang`):
@@ -624,6 +626,8 @@ This sub-stage merges the current release branch into `base_branch` BEFORE tag p
 - `state.branch == base_branch` (already on base — nothing to merge)
 - `base_branch == null` (auto-detect failed at Setup, no user-supplied value)
 
+**On either skip-condition match**: set `substep → "merge_base_pushed"` (so the jump table maps a resumed session consistently to 6c-ii rather than re-entering Stage 6.5), keep `current_stage == "git_ops"` unchanged, and proceed to 6c-ii. This makes the entry-skip path symmetric with Path A and the HARD-GATE Skip path (both of which also land on `merge_base_pushed`).
+
 If neither skip condition matches, proceed below.
 
 **Entry guard — branch re-detection** (CM7):
@@ -632,7 +636,9 @@ If neither skip condition matches, proceed below.
 git rev-parse --abbrev-ref HEAD
 ```
 
-Compare result (`current_branch`) to `state.branch`. On mismatch → halt with error: `Current branch changed mid-session ({state.branch} → {current_branch}). Switch back to {state.branch} and re-invoke /ship, OR Restart from Stage 1.` (state.json `substep` retains current value for resume.)
+Compare result (`current_branch`) to `state.branch`. On mismatch → halt with error: `Current branch changed mid-session ({state.branch} → {current_branch}). Switch back to {state.branch} and re-invoke /ship, OR Restart from Stage 1.`
+
+**Halt behavior** (closes M10): `state.json` is preserved as-is — `substep` retains its current value (typically `"git_branch_pushed"` since the entry guard runs before any 6.5-internal substep transition; could be `"merge_base_pending"` or `"merge_base_done"` if the session is being resumed mid-6.5). When the user later switches back to `{state.branch}` and re-invokes /ship, the jump table re-routes to Stage 6.5 entry (or to step 2 / step 5 if a 6.5-internal substep is active) and **this entry guard is re-executed**, so the branch-equality check is re-evaluated; if the user is now on the correct branch the guard passes and execution continues. The guard is therefore safe to re-run any number of times.
 
 **Branch protection pre-check** (CC5):
 
@@ -657,7 +663,16 @@ All `unknown` and `unprotected` cases converge on Path B. Path B step 7's push-r
 
 **A. Protected branch path** — direct push known to be rejected; do not attempt local merge:
 
-`AskUserQuestion`:
+**A.1. Pre-check existing PR (idempotency guard, closes M2)**: before showing the gate, run:
+```bash
+gh pr list --base {base_branch} --head {release_branch} --state open --json url,number --jq '.[0]'
+```
+- If output is non-empty (an open PR for this base/head pair already exists from a prior interrupted session) → inform the user `[ship] An open PR for {release_branch} → {base_branch} already exists: <url>. Reusing it.`, set `state.stage_results.merge_to_base.pre_merge_sha = null` (Path A does not capture a SHA — closes M3), set `state.stage_results.merge_to_base.path_a_pr_url = "<url>"`, transition `substep → "merge_base_pushed"`, run `git checkout {release_branch}` to ensure HEAD context for 6c-ii (closes M11; halt on checkout failure with explicit error), and continue to 6c-ii.
+- If output is empty → proceed to A.2.
+
+**A.2. Path A entry transition**: set `substep → "merge_base_pending"` BEFORE displaying the gate (closes M2 — without this, an interrupted session resuming at `git_branch_pushed` would re-enter Stage 6.5 from scratch and the `gh pr list` pre-check above is what makes that re-entry safe; setting `merge_base_pending` makes resume jump to step 2 instead, where this very same Path A logic runs again, gh-list-guarded). Also set `state.stage_results.merge_to_base.pre_merge_sha = null` explicitly so downstream consumers (Rollback documentation, future readers of state.json) can distinguish Path A (no local merge → no rollback SHA) from Path B (SHA captured) — closes M3.
+
+**A.3. AskUserQuestion**:
 ```
 header: "Protected Base"     (translate to user_lang)
 question: "Base branch `{base_branch}` is protected — direct push will be rejected. Open a PR instead?"
@@ -667,9 +682,9 @@ options:                      (translate description to user_lang; keep label En
   - "Skip Stage 6.5" / "Skip merge — base_branch will lag this release. Tag still pushes."
   - "Stop" / "Halt for manual intervention"
 ```
-- **Create PR** → execute `gh pr create --base {base_branch} --head {release_branch} --title "Release {release_version}"`. On success → `substep → "merge_base_pushed"` (treating PR creation as the "push" equivalent — tag still pushes to release_branch lineage). On failure → re-display gate. Continue to 6c-ii.
-- **Skip Stage 6.5** → `substep → "merge_base_pushed"`, warn user that base_branch will lag this release, continue to 6c-ii.
-- **Stop** → halt session.
+- **Create PR** → execute `gh pr create --base {base_branch} --head {release_branch} --title "Release {release_version}"`. On success: parse the printed PR URL, store `state.stage_results.merge_to_base.path_a_pr_url = "<url>"`, set `substep → "merge_base_pushed"` (treating PR creation as the "push" equivalent — the tag still pushes to release_branch lineage at 6c-ii), execute `git checkout {release_branch}` to guarantee HEAD context for 6c-ii (closes M11; halt on checkout failure), continue to 6c-ii. On failure: if stderr indicates "a pull request for branch ... already exists" (race condition where a PR was created between A.1's check and now) → re-run A.1's `gh pr list` to fetch the URL and proceed via the "existing PR" branch above; otherwise → re-display this gate (the user can choose Skip or Stop to escape).
+- **Skip Stage 6.5** → `substep → "merge_base_pushed"`, run `git checkout {release_branch}` (defensive — Path A has not changed branches but ensures HEAD context for 6c-ii regardless of any prior state; closes M11; halt on failure), warn user that base_branch will lag this release, continue to 6c-ii.
+- **Stop** → halt session (state.json preserved — `substep == "merge_base_pending"` enables resume from A.1's idempotency check).
 
 **B. Standard merge path** (no detected protection or status unknown):
 
@@ -776,7 +791,7 @@ options:                      (translate description to user_lang; keep label En
 > `git checkout {base_branch} && git reset --hard {pre_merge_sha}`
 > on `{base_branch}` to revert to pre-merge state. The `pre_merge_sha` is stored in `state.json` at `stage_results.merge_to_base.pre_merge_sha` and refers to the base_branch tip BEFORE the merge."
 
-After Stage 6.5 completes (success path or skip path), proceed to 6c-ii tag push (existing behavior, unchanged).
+After Stage 6.5 completes (success path or skip path) — `substep == "merge_base_pushed"` and HEAD on `{release_branch}` — proceed to 6c-ii tag push. **6c-ii processes both entry routes identically**: (i) sessions that ran 6c-i and traversed Stage 6.5 (this section), (ii) legacy/skip sessions that reached 6c-ii directly via the entry-level Skip conditions. In both cases 6c-ii executes `git push origin {tag_name}` against the release_branch lineage and on success transitions `substep → "git_push_done"` (closes m9 / Arch N3).
 
 **6c-ii: Push tag** (only if `tag_name` is not null):
 Execute: `git push origin {tag_name}`
