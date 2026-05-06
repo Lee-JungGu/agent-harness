@@ -1,5 +1,6 @@
 .env
 .harness/
+.claude/
 .venv/
 __pycache__/
 *.pyc
