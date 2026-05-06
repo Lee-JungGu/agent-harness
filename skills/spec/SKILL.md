@@ -75,6 +75,8 @@ Before starting a new task, check if `.harness/state.json` already exists **and*
        - label: "Restart" / description: "Delete .harness/ and start from scratch"
        - label: "Stop" / description: "Delete .harness/ and halt"
 
+   **(M5) Dynamic Resume description override for `critic_halted`**: when `state.json.phase == "critic_halted"` (terminal), the Resume option does not advance any phase — it only surfaces the manual-intervention message defined in the `critic_halted` action below. To prevent users from selecting Resume expecting auto-progress, override the Resume option's description (in `user_lang`) to: "Surface manual intervention message only — no automatic phase advance possible from `critic_halted`." Keep the label "Resume" so the option key remains stable; make the action explicit through the description.
+
    Actions per selection:
    - **Resume**: Jump to the step matching state.json phase:
      - `setup` → Step 1
@@ -83,14 +85,14 @@ Before starting a new task, check if `.harness/state.json` already exists **and*
      - `qa_complete` → Phase 2 Spec Generation (entry)
      - `gen_ready` → Phase 2 Spec Generation (entry)
      - `critic_active` (NEW in 8.4, deep mode) — branch on `state.critic.applied`:
-       - `"approved"` → skip directly to Final HARD-GATE (Critic already concluded — typically reached if session was paused after the gate but before phase advance)
+       - `"approved"` → skip directly to Final HARD-GATE (Critic already concluded). **(m5) Reachability note**: in normal execution Phase 2c-D step "Approve as-is" (line ~466) writes `critic.applied = "approved"` then `phase = "critic_complete"` in that order; a crash *between* those two non-atomic state.json writes is the only path that leaves `phase == "critic_active" AND critic.applied == "approved"`. This branch handles that recovery edge case.
        - `"pending"` → re-present Critic Gate using `state.critic.last_findings_path` (do NOT re-dispatch Critic — findings already exist)
        - `"revised"` → re-enter Phase 2d-D step 3 (re-Critic dispatch on revised spec.md)
        - otherwise (null/unknown) → re-dispatch Phase 2c-D Critic from start
      - `re_synthesis_active` (NEW in 8.4, deep mode) → re-enter Phase 2d-D step 1 (Re-synthesis); `state.critic.round` is at its pre-increment value (0)
      - `re_critic_active` (NEW in 8.4, deep mode) → re-enter Phase 2d-D step 3 (Re-Critic dispatch); `state.critic.round` is already 1
      - `critic_complete` (NEW in 8.4, deep mode) → Final HARD-GATE (HARD-GATE entry will normalize `phase → "spec_ready"`)
-     - `critic_halted` (NEW in 8.4, deep mode, **terminal**) — do NOT auto-resume. Surface this state to the user with the message: "Previous spec session halted in Critic flow (`failure_reason: <state.critic.failure_reason>`). Manual intervention required — review `.harness/spec/critic_findings.md` and either fix manually + edit state.json to set `phase` to `qa_active` (fresh start with same Q&A) or choose Restart/Stop." Do NOT auto-route to any phase.
+     - `critic_halted` (NEW in 8.4, deep mode, **terminal**) — do NOT auto-resume. Surface this state to the user with the message **(in `user_lang`)** (m6): "Previous spec session halted in Critic flow (`failure_reason: <state.critic.failure_reason>`). Manual intervention required — review `.harness/spec/critic_findings.md`. To restart cleanly: choose Restart/Stop, or fix manually + edit state.json setting `phase` to `qa_active` (fresh start with same Q&A). **(M1) Important when manually editing**: also verify `state.conventions` — if it is `"file:.harness/conventions.md"` but `.harness/conventions.md` no longer exists (e.g., cleanup ran or `.harness/` was deleted), reset `state.conventions` to `null` before resuming, so Step 1.5 re-runs to repopulate conventions; otherwise Phase 2a-D step 3 will hard-error halt on the null-conventions guard immediately after resume." Do NOT auto-route to any phase.
      - `spec_ready` → HARD GATE (show existing spec.md)
      - `completed` → no active session, proceed to Step 1
    - **Restart**: Delete `.harness/` directory and proceed to Step 1
