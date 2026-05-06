@@ -11,6 +11,23 @@ You are orchestrating a **requirements specification workflow** with multi-round
 
 **Zero-setup:** Works with or without a git repository. No codebase required — spec can describe a greenfield project.
 
+## Table of Contents (NEW in 8.4 — m5 maintainability)
+
+Skim this list to locate sections by name (file is large; section-anchor cross-references throughout the document use these heading names rather than line numbers, see m3+M3 anchor-rot fix):
+
+1. **Environment Detection** — `has_git` flag.
+2. **User Language Detection** — `user_lang`.
+3. **Standard Status Format** + **Phase labels** — phase enumeration (setup → completed; new in 8.4: convention_scan_active, critic_*, re_*, critic_halted).
+4. **Session Recovery** — Resume jump table per phase; backward-compat policy.
+5. **Step 1: Setup** — slugify, slug-collision check (M15), state.json schema doc, **§Atomicity Contract** (C6).
+6. **Step 1.5: Convention Scan** — `--reference` flag, has_git=true/false branches, **§Step 1.5 conventions field contract** (canonical SSOT for `state.conventions` enum).
+7. **Phase 1 — Requirements Discovery (Q&A)** — multi-round, idempotent state init.
+8. **Phase 2 — Spec Generation** — Quick mode (single synthesis) / Deep mode (Phases 2a-D Analysts + 2b-D Synthesis + 2c-D Critic + 2d-D Re-synthesis).
+9. **HARD GATE** — final approval gate with translated 3-way options.
+10. **Phase 3 — Handoff** — artifacts persistence, slug-safe `/workflow` invocation, cleanup safety guard.
+11. **Spec Output Format** — 7-section template with /workflow compatibility mapping.
+12. **Status Check** — anytime command summary.
+
 ## Environment Detection
 
 At startup, detect whether the current directory is inside a git repository:
@@ -149,7 +166,7 @@ When the user provides a task description (via $ARGUMENTS or in conversation), e
    - If `--reference <path>` provided, validate as follows. On any validation failure, halt with an explicit error message naming the failed check (mirror workflow `--output-dir` halt-on-fail behavior — do NOT silently fall back to auto-detect):
      1. **Base validation**: pass `validate_path(path, kind=file_reference)` per workflow §Path Validator (relative path, no `..` segment, inside `repo_path`, outside `.harness/`, `docs/harness/*`, `memory/`).
      2. **Extension whitelist** (NEW in 8.4 for `--reference`): file extension MUST be one of `.md`, `.txt`, `.markdown`. Other extensions (e.g., `.env`, `.json`, `.yml`, `.pem`, binary) → halt with "unsupported reference extension."
-     3. **Symlink rejection** (NEW in 8.4 for `--reference`): if `Path(path).is_symlink()` → halt with "symbolic links not allowed for --reference."
+     3. **Symlink rejection** (NEW in 8.4 for `--reference`): if `Path(path).is_symlink()` → halt with "symbolic links not allowed for --reference." **(s2) Intermediate-directory symlink check** (NEW in 8.4 hardening): even if the leaf is not a symlink, an intermediate directory in `path` (e.g., `path = "docs/foo.md"` where `docs/` itself is a symlink to `/etc`) can still escape the repo. Compare `Path(path).resolve()` against `Path(path).absolute()` — if they differ, an intermediate symlink resolved away from the literal path; halt with "symbolic links in intermediate directories not allowed for --reference." On Windows, this also catches NTFS junction points (which `.resolve()` follows but `.absolute()` does not). The Base validation step 1's `validate_path(kind=file_reference)` containment check (`inside repo_path`) is then the second line of defense: even if a symlink resolves to within the repo (rare but possible), the explicit literal-vs-resolved check above flags it for review.
      4. **Size limit** (NEW in 8.4 for `--reference`): file size > 200 KB OR line count > 5000 → halt with "reference file too large." Convention files should be human-curated, not auto-generated dumps.
    - On valid path: normalize to a **repo-relative path** (relative to `repo_path`; no leading `/` or drive letter; e.g., `docs/references/spec.md`) and store as `cli_flags.reference: <normalized_path>` in state.json (audit-friendly). Will be consumed by Step 1.5 Convention Scan. (M4: prior wording "absolute repo-relative path" was internally contradictory and risked OS-absolute paths leaking into state.json on Windows.)
    - If not provided: `cli_flags.reference: null`.
@@ -404,6 +421,10 @@ Print status in the standard format, prefixed with `[harness] Spec draft ready.`
 
 7. **Empty-input contract check:** if **every dispatched analyst's** 1-line (count = number of analyst templates listed in step 1; currently 4 in 8.4 — `requirements_analyst`, `user_scenario_analyst`, `risk_auditor`, `tech_constraint_analyst` — but the orchestrator MUST iterate over the actual dispatched set rather than hard-coding `4` so that adding a 5th analyst in a future release does not silently break this check) contains the literal sentinel `— no findings —` (em-dash, space, "no findings", space, em-dash) AND none contain `dispatch failed` or `parse failed`, set `state.critic = { applied: "approved", round: 0, last_findings_path: null, failure_reason: null }` (single atomic write per §Atomicity Contract) and skip Phase 2c-D / 2d-D only (Phase 2b-D Synthesis still runs — it produces `spec.md` from `task_description` + `qa_discovery_notes` + the analyst "no findings" files; Synthesis output is then routed directly to HARD-GATE because of the `state.critic.applied = "approved"` signal that Phase 2b-D step 6 reads).
 
+   **(m1) Sentinel semantic note**: substring matching on `— no findings —` is intentional (design choice — keeps the orchestrator simple and forward-compatible with new "no findings — <reason>" suffixes). The two suffixes currently emitted by tech_constraint_analyst (`greenfield project` vs `input ambiguous`) differ in meaning — "greenfield" means no constraints exist by design, "input ambiguous" means analysis was blocked by lack of input — but both indicate "Critic skip is safe": greenfield because there is genuinely nothing to find, input-ambiguous because the analyst could not produce findings without better Q&A (and Critic on top of that empty pipeline would not improve quality, so skipping saves a dispatch). If a future maintenance pass wants to differentiate behavior (e.g., "input ambiguous" should re-prompt Q&A rather than skip Critic), update this contract first, then the sentinels.
+
+   **1-line extraction rule**: when checking for the sentinel, extract the 1-line as the **last non-blank line** of the sub-agent's conversational response (after `.strip()`). This protects against trailing newlines and the rare case where the sub-agent emits the file write confirmation BEFORE the 1-line; the last line is what the contract specifies.
+
    **Single-source-of-truth contract**: `state.critic.applied` is the only authoritative signal for whether Critic ran. Phase 2a-D step 7 sets it eagerly; Phase 2b-D step 6 reads it as the sole gate to bypass Phase 2c-D. Do NOT add parallel decision logic in any other phase that diverges from this signal.
 
    If any analyst 1-line contains `dispatch failed` or `parse failed`, infrastructure failure is suspected — do NOT skip Critic; instead proceed to Phase 2b-D Synthesis and Phase 2c-D Critic normally so the user can manually review. (CM4 fix)
@@ -414,7 +435,7 @@ Print status in the standard format, prefixed with `[harness] Spec draft ready.`
 
 2. Read all four analysis files from Phase 2a-D.
 
-3. Read `critic_findings` content: if `.harness/spec/critic_findings.md` exists (re-synthesis path), read its content; otherwise pass empty string (first synthesis path).
+3. Read `critic_findings` content using **`state.critic` as the single source of truth** (s1: SSOT clarification): if `state.critic` exists AND `state.critic.applied` ∈ `{"pending", "revised"}` AND `state.critic.last_findings_path` is non-null AND the file at that path exists, this is the re-synthesis path — read content from `state.critic.last_findings_path`. Otherwise pass empty string (first synthesis path). The previous file-existence-only check was a parallel signal that could disagree with `state.critic` (e.g. on stale `.harness/spec/critic_findings.md` from a crashed prior session); using `state.critic` as primary eliminates that ambiguity.
 
 4. Fill template variables:
    - `{task_description}`
@@ -576,7 +597,7 @@ Update state.json: `phase` → `"completed"`.
 3. **Persist spec artifacts to `{docs_path}` (NEW in 8.4)** — BEFORE cleanup:
 
    **(s1) Path Safety Guard for `{docs_path}`** — before any file operation on `{docs_path}`, validate (mirroring `/workflow` Step 8 Artifact Cleanup Safety Guard):
-   - Extract `<slug>` = last path segment of `{docs_path}` (before trailing `/`). It must be non-empty/non-whitespace, must NOT be `memory` (reserved name), must NOT contain `..` or `/` within itself, and must NOT be `.`.
+   - Extract `<slug>` via explicit rstrip then split: `slug = docs_path.rstrip("/").split("/")[-1]` (NEW in 8.4: explicit form so a trailing slash on `docs_path` does not produce an empty `slug` and false-abort the cleanup; equivalent to "last path segment before trailing /" but unambiguous in implementation). It must be non-empty/non-whitespace, must NOT be `memory` (reserved name), must NOT contain `..` or `/` within itself, and must NOT be `.`.
    - `Path(docs_path).resolve()` ⊆ `Path.cwd()` (symlink escape prevention; no `has_git` condition).
    - On any check failure: **ABORT Phase 3** — do NOT delete `.harness/`, do NOT run cleanup. Print the failed check. The `.harness/spec/` artifacts remain intact for manual recovery.
 
