@@ -148,7 +148,10 @@ Stage resume map (with substep details):
   - `substep == null` or `"git_commit_pending"` → Step 6a (Commit)
   - `substep == "git_commit_done"` or `"git_tag_pending"` → Step 6b (Tag)
   - `substep == "git_tag_done"` or `"git_push_pending"` → Step 6c (Push — branch first)
-  - `substep == "git_branch_pushed"` → Step 6c-ii (tag push only)
+  - `substep == "git_branch_pushed"` → Stage 6.5 entry (merge_to_base — Skip conditions checked first)
+  - `substep == "merge_base_pending"` → Stage 6.5 step 1 (pre-merge HARD-GATE)
+  - `substep == "merge_base_done"` → Stage 6.5 step 5 (post-merge / pre-push HARD-GATE)
+  - `substep == "merge_base_pushed"` → Step 6c-ii (tag push)
   - `substep == "git_push_done"` → next stage
 - `gh_release` → Step 7
 - `completed` → no active session, proceed to Step 1
