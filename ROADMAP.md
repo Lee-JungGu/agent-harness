@@ -2,6 +2,17 @@
 
 ## v8.x — Shipped
 
+**v8.4.0** — Spec Skill Hardening + /ship merge-to-base
+
+- **A+B+C+D — /spec Hardening**: Risk Auditor + Tech Constraint Analyst added to deep mode (4-analyst parallel synthesis), Spec Critic stage with 3-way gate + 1-round auto-revise, Convention Scan with `--reference` flag and has_git=false candidate file detection, qa_notes / critic_findings / conventions persistence to `{docs_path}` for slug-safe /spec → /workflow handoff (workflow Step 1.5 reuse, Step 2 variable injection into 4 planner templates, Step 8 cleanup protection).
+  Token cost (deep mode): ~1.9x of base (analytic estimate from dispatch count: 5 calls deep vs 3 calls pre-8.4 + per-call content growth; live measurement deferred to follow-up smoke session). The estimate **includes** the Input Trust Model boilerplate (~7 lines / ~150 tokens) duplicated across 8 templates (4 planners + 4 spec analyst templates) for security clarity — this is a deliberate trade-off: ~1680 tokens of overhead per /spec deep run buys uniform prompt-injection guards on every sub-agent dispatch, judged worth it over a 1-line compressed form that risks ambiguity. Spec-time detection rate (coin-washer reproduce, analytic mapping of 4-analyst + Critic against original review_report.md): **Critical 5/7** (high-confidence catches C1+C2+C4+C5+C6; borderline C3+C7), **Major 6/12** (high-confidence M1+M2+M3+M4+M5+M14). False-positive on 2 known-good specs (`feature-coin-washer-improvements`, `qaas-411-reopen-fix` — analytic prediction): **Critical=0, Major≤1** each.
+  See: `skills/spec/SKILL.md`, `templates/spec/{risk_auditor,tech_constraint_analyst,critic,synthesis}.md`, `templates/planner/*.md`
+- **N2 — /ship Stage 6.5 merge_to_base**: Adds `develop → main` merge step before tag push (separate PR `harness/ship-merge-to-base` — added in companion plan if not yet merged). See `skills/ship/SKILL.md`.
+
+**Breaking changes**: deep mode persona count 2 → 4 + Critic; /spec Phase 3 handoff CLI contract gains `--output-dir`; planner templates gain `{qa_discovery_notes}` / `{critic_findings}` placeholders (forked custom templates may render empty Discovery Notes silently); `/spec` deep mode now hard-error halts at Phase 2a-D step 3 if `state.conventions` is null on resume — pre-8.4 sessions that reach `qa_complete`/`gen_ready`/`qa_active` MUST complete Step 1.5 (Convention Scan) before Phase 2 entry, either by Restart or via the M14 backward-compat Resume description override which routes through Step 1.5 first; intentional asymmetry vs `/workflow`'s silent-default missing-field policy (rationale: 4-analyst pipeline depends on convention context for high-quality output, so silent degradation through 8.4 flow would produce lower-quality specs).
+
+---
+
 **v8.3.0** — Ship version_bump auto-detection for `.claude-plugin/*.json`
 
 - **N1 — `/ship` version_bump auto-detection for `.claude-plugin/*.json`**: Stage 2 (`version_bump`) now auto-detects version fields in `.claude-plugin/plugin.json` (top-level `$.version`) and `.claude-plugin/marketplace.json` (`$.metadata.version` + `$.plugins[*].version`) alongside the existing standard package manifests. Pass 2 uses JSON parsing on exact key paths to avoid regression where naive string replace would taint other fields (e.g., a `description` containing the same version string). Original line-ending (CRLF vs LF) and trailing-newline state are preserved.
