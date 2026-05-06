@@ -217,6 +217,8 @@ If `.harness/state.json` does not exist, proceed to Step 1.
 [Q&A] → version_bump → changelog → build_verify → code_review → git_ops → gh_release
 ```
 
+> **Note (8.4):** Stage 6.5 (`merge_to_base`) is a SUB-stage of `git_ops`, not a new top-level stage. It runs between 6c-i (branch push) and 6c-ii (tag push). The `current_stage` field continues to read `"git_ops"` throughout 6.5; intra-stage progress is tracked via `substep` (`merge_base_pending` / `merge_base_done` / `merge_base_pushed`).
+
 Stages may be skipped (if not selected or not available), but order is always preserved. A stage may never run before its predecessor.
 
 Rules:
