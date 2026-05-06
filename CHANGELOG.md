@@ -14,6 +14,7 @@ Commit messages follow [Conventional Commits](https://www.conventionalcommits.or
 - **/spec Critic stage**: cold review of synthesized spec.md classifies findings as Critical/Major/Minor with `[C*]/[M*]/[m*]` IDs. Critical or Major findings trigger a 3-way gate (Auto-revise / Modify / Approve as-is). Auto-revise re-runs synthesis with `{critic_findings}` injection (max 1 round; 2nd round offers Approve/Stop only — no oscillation).
 - **/spec Convention Scan (Step 1.5)**: scans CLAUDE.md (has_git=true, mirrors workflow) and 7 candidate files (has_git=false: STYLE_GUIDE.md, CONTRIBUTING.md, conventions.md, guidelines.md, policy.md, docs/style-guide.md, docs/conventions.md, case-insensitive). New `--reference <path>` CLI flag overrides auto-detect.
 - **/spec Phase 3 persists `qa_notes.md`, `critic_findings.md`, `conventions.md`** to `{docs_path}` before cleanup. /workflow Step 1.5 auto-reuses persisted conventions; Step 2 injects `{qa_discovery_notes}` + `{critic_findings}` into all 4 planner templates (architect, senior_developer, qa_specialist, planner_single). /workflow Step 8 "Commit code only" preserves the 3 artifacts in the commit.
+- **/ship Stage 6.5 (`merge_to_base`)**: merges release branch into base branch BEFORE tag push (closes develop→main lag from 8.1.0/8.2.0/8.3.0). Branch protection detection, pre_merge_sha rollback, substep-level recovery, 5-way push rejection handling, HARD-GATEs at merge and push.
 
 ### Changed
 
@@ -27,10 +28,6 @@ Commit messages follow [Conventional Commits](https://www.conventionalcommits.or
 - **Persona count change in /spec deep mode** (2 → 4 + Critic). Token cost increases approx 1.9x for deep runs (estimated; measured value TBD per Phase 7 smoke test — ROADMAP entry will be updated with the actual multiplier after smoke test). The legacy 2-analyst behavior is no longer accessible in 8.4 (no `--legacy-deep` flag — defer to 8.5 if user feedback warrants).
 - **/spec → /workflow handoff CLI contract changed**. Users of automation scripts that wrap /spec output strings should update to expect `--output-dir docs/harness/<slug>/` in the invocation. The task description string also changed from `"Implement based on docs/harness/<slug>/spec.md"` (absolute-looking) to `"Implement based on {docs_path}spec.md"` (placeholder form documenting the assembly contract).
 - **Planner templates**: forked custom planner templates that omit the new `{qa_discovery_notes}` / `{critic_findings}` placeholders will silently render an empty Discovery Notes section. Recommended: update fork to include the placeholders (see `templates/planner/architect.md` for reference).
-
-### N2 Companion (separate PR `harness/ship-merge-to-base`)
-
-- **/ship Stage 6.5 (`merge_to_base`)** — merges current release branch into `base_branch` BEFORE tag push, with branch protection detection, `pre_merge_sha` rollback support, and substep-level recovery. See separate plan: `docs/superpowers/plans/2026-04-30-ship-merge-to-base-n2-plan.md`.
 
 ## [8.3.0] — 2026-04-30
 
