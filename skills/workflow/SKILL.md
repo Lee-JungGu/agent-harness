@@ -256,7 +256,8 @@ Retry loops:
      - **Step 1** Normalize: `\` → `/` (always, OS-independent). UNC pattern (`\\server\…` or `//server/…`) → halt with error: "UNC paths are not allowed."
      - **Step 2** Absolute path: matches `^/` or `^[A-Za-z]:/` → halt with error: "output-dir must be a relative path."
      - **Step 3** Segment `..`: `path.split("/")` — if any segment `== ".."` → halt with error: "output-dir must not contain '..'." (segment-exact check, not substring)
-     - **Step 4** Reserved first segment: `path.split("/")[0]` ∈ `{memory, spec, planner, generator, evaluator, verify, harness, .harness, docs}` → halt with error: "output-dir value starts with a reserved directory name." (first segment only — trailing slash stripped first; full-path comparison is NOT performed)
+     - **Step 4** Reserved first segment: `path.split("/")[0]` ∈ `{memory, spec, planner, generator, evaluator, verify, harness, .harness}` → halt with error: "output-dir value starts with a reserved directory name." (first segment only — trailing slash stripped first; full-path comparison is NOT performed)
+     - **Step 4.5** (NEW in 8.4) `docs` first-segment exception for `/spec → /workflow` slug-safe handoff: if `path.split("/")[0] == "docs"`, the second segment MUST be `harness` (i.e. path starts with `docs/harness/...`). Otherwise halt with error: "output-dir under docs/ must be docs/harness/..." Rationale: the default `output_base = "docs/harness"` always writes under this tree, so the standard /spec handoff value `docs/harness/<slug>/` is the only legitimate `docs/...` override; any other `docs/<other>/` first-segment override is rejected to prevent accidental writes outside the harness namespace.
      - If valid: normalize with trailing slash stripped, store in `cli_flags.output_dir`.
 3. **Slugify the task:** lowercase, transliterate non-ASCII to ASCII, remove non-word chars except hyphens, replace spaces with hyphens, truncate to 50 chars. Store as `<slug>`.
 4. **Auto-detect project language and commands.** Scan the working directory:
@@ -1094,7 +1095,11 @@ validate_path(path, kind) where kind ∈ {output_dir, file_reference, diff_targe
   4. kind-specific:
      - output_dir:
          First segment (path.split("/")[0]) ∉ {memory, spec, planner, generator,
-         evaluator, verify, harness, .harness, docs}.
+         evaluator, verify, harness, .harness}.
+         Special case (NEW in 8.4): if first segment == "docs", second segment
+         MUST == "harness" (path startswith "docs/harness/"). Else halt:
+         "output-dir under docs/ must be docs/harness/..." (allows /spec handoff
+         path docs/harness/<slug>/ while still blocking other docs/* overrides.)
      - file_reference (failing_files_list):
          (a) relative path, (b) no .. segment, (c) inside repo_path,
          (d) outside .harness/, docs/harness/*, memory/.
