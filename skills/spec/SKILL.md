@@ -135,7 +135,7 @@ When the user provides a task description (via $ARGUMENTS or in conversation), e
      2. **Extension whitelist** (NEW in 8.4 for `--reference`): file extension MUST be one of `.md`, `.txt`, `.markdown`. Other extensions (e.g., `.env`, `.json`, `.yml`, `.pem`, binary) → halt with "unsupported reference extension."
      3. **Symlink rejection** (NEW in 8.4 for `--reference`): if `Path(path).is_symlink()` → halt with "symbolic links not allowed for --reference."
      4. **Size limit** (NEW in 8.4 for `--reference`): file size > 200 KB OR line count > 5000 → halt with "reference file too large." Convention files should be human-curated, not auto-generated dumps.
-   - On valid path: normalize to absolute repo-relative path and store as `cli_flags.reference: <normalized_path>` in state.json (audit-friendly). Will be consumed by Step 1.5 Convention Scan.
+   - On valid path: normalize to a **repo-relative path** (relative to `repo_path`; no leading `/` or drive letter; e.g., `docs/references/spec.md`) and store as `cli_flags.reference: <normalized_path>` in state.json (audit-friendly). Will be consumed by Step 1.5 Convention Scan. (M4: prior wording "absolute repo-relative path" was internally contradictory and risked OS-absolute paths leaking into state.json on Windows.)
    - If not provided: `cli_flags.reference: null`.
 5. **Mode selection:** If `--mode quick` or `--mode deep` was passed, set mode and skip prompt. Otherwise, use AskUserQuestion to ask the user (in `user_lang`):
      header: "Mode"
@@ -174,7 +174,7 @@ When the user provides a task description (via $ARGUMENTS or in conversation), e
    - `branch` — `"harness/spec-<slug>"` if `has_git`, else `null`
    - `docs_path` — `"docs/harness/<slug>/"`
    - `created_at` — ISO8601 timestamp
-   - `cli_flags.reference` (NEW in 8.4) — `null` if `--reference` not provided, or the normalized absolute repo-relative path (post-validation, see step 4.5)
+   - `cli_flags.reference` (NEW in 8.4) — `null` if `--reference` not provided, or the normalized **repo-relative path** (relative to `repo_path`; no leading `/` or drive letter). Must be a value that has passed Path Validator (`kind=file_reference`) — see step 4.5.
    - `conventions` (NEW in 8.4) — `null` (Step 1.5 not yet executed), `"skipped"` (user explicitly chose Skip), or `"file:.harness/conventions.md"` (literal sentinel; see §Step 1.5 contract)
    - `critic` (NEW in 8.4) — `null` (Phase 2c-D not reached) or object:
      ```
@@ -230,8 +230,8 @@ This step runs after Setup and before Phase 1 Q&A. It populates `state.conventio
      - `cwd/policy.md`
      - `cwd/docs/style-guide.md`
      - `cwd/docs/conventions.md`
-   - **Excluded directories (NEW in 8.4 hardening)**: even if a candidate path resolves through a symlink or junction into one of these, reject the match — `node_modules/`, `.git/`, `vendor/`, `dist/`, `build/`, `.next/`, `__pycache__/`, `.venv/`, `target/` (any path segment match).
-   - **Symlink policy**: reject any candidate where `Path(p).is_symlink()` is true (skip with warn).
+   - **Symlink policy (applied FIRST)**: if `Path(p).is_symlink()` is true, reject the candidate (skip with warn). This blocks symlink-based escape attempts before any further checks.
+   - **Excluded directories (applied to non-symlink resolved paths)**: reject any candidate whose resolved real path contains one of `node_modules/`, `.git/`, `vendor/`, `dist/`, `build/`, `.next/`, `__pycache__/`, `.venv/`, `target/` as any path segment. (m3: explicit two-phase order — symlink check first, then segment check on the verified-non-symlink path; prevents redundant double-handling of the same edge case where a symlink points into an excluded dir.)
    - Filter to files with >= 50 lines AND <= 5000 lines AND <= 200 KB (size cap mirrors `--reference`).
    - 0 matches → set `conventions → "skipped"`.
    - 1 match → copy content to `.harness/conventions.md`, set conventions accordingly.
@@ -519,7 +519,7 @@ Show `spec.md` to the user and ask for explicit confirmation using AskUserQuesti
 
 If user selects "Modify" or provides modification details via "Other":
   - Collect the modification request.
-  - **Re-run Phase 2** (same mode) incorporating the changes. The `qa_discovery_notes` remain unchanged; the modification request is appended as a note.
+  - **Re-run Phase 2** (same mode) incorporating the changes. The `qa_discovery_notes` remain unchanged. The modification request MUST be appended to **every Phase 2 sub-agent prompt that incorporates user-provided text** (analyst dispatches in 2a/2c, Synthesis in 2b/2d) as a final `## User Modification Request` block, using the **identical sentinel pattern** described under Phase 2d-D step 1 above (fenced `text` code block + meta-guard preamble; user text rendered verbatim, NOT interpolated as markdown). This closes the Modify-channel prompt-injection surface symmetrically with Re-synthesis — both Modify entry points (HARD GATE Modify + Critic Gate Modify) must apply the sentinel. (C4)
   - Re-present this HARD GATE with the updated spec.
 
 If user selects "Stop": halt the workflow, clean up `.harness/`.
@@ -549,7 +549,14 @@ Update state.json: `phase` → `"completed"`.
 
    If user selects "Done": **first run step 3 (persist artifacts) and step 4 (cleanup)**, then halt. Persisting artifacts on the "Done" path preserves `qa_notes.md` / `critic_findings.md` / `conventions.md` so a future `/workflow` session invoked manually via `--output-dir docs/harness/<slug>/` can still consume them.
 
-3. **Persist spec artifacts to `{docs_path}` (NEW in 8.4)** — BEFORE cleanup, **ensure `{docs_path}` exists** (`Path(docs_path).mkdir(parents=True, exist_ok=True)` or equivalent — idempotent and safe even though Setup step 3 already created it; Session Recovery paths may have bypassed that step). Then copy the following files from `.harness/` into `docs/harness/<slug>/` (only when the source file exists; skip silently if missing):
+3. **Persist spec artifacts to `{docs_path}` (NEW in 8.4)** — BEFORE cleanup:
+
+   **(s1) Path Safety Guard for `{docs_path}`** — before any file operation on `{docs_path}`, validate (mirroring `/workflow` Step 8 Artifact Cleanup Safety Guard):
+   - Extract `<slug>` = last path segment of `{docs_path}` (before trailing `/`). It must be non-empty/non-whitespace, must NOT be `memory` (reserved name), must NOT contain `..` or `/` within itself, and must NOT be `.`.
+   - `Path(docs_path).resolve()` ⊆ `Path.cwd()` (symlink escape prevention; no `has_git` condition).
+   - On any check failure: **ABORT Phase 3** — do NOT delete `.harness/`, do NOT run cleanup. Print the failed check. The `.harness/spec/` artifacts remain intact for manual recovery.
+
+   After validation passes, **ensure `{docs_path}` exists** (`Path(docs_path).mkdir(parents=True, exist_ok=True)` or equivalent — idempotent; Session Recovery paths may have bypassed Setup step 3). Then copy the following files from `.harness/` into `docs/harness/<slug>/` (only when the source file exists; skip silently if missing):
    - `.harness/spec/qa_notes.md` → `docs/harness/<slug>/qa_notes.md`
    - `.harness/spec/critic_findings.md` → `docs/harness/<slug>/critic_findings.md`
    - `.harness/conventions.md` → `docs/harness/<slug>/conventions.md`
