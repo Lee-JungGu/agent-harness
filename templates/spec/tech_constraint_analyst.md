@@ -83,17 +83,17 @@ CRITICAL: Your response must be EXACTLY ONE LINE.
 
 For normal completion (analysis written to file with substantive findings):
 ```
-tech_constraint analysis written
+tech_constraint_analyst analysis written
 ```
 
 For empty findings (greenfield, no codebase context):
 ```
-tech_constraint analysis written — no findings — greenfield project
+tech_constraint_analyst analysis written — no findings — greenfield project
 ```
 
 For Q&A all unconfirmed (no actionable constraints identified):
 ```
-tech_constraint analysis written — no findings — input ambiguous
+tech_constraint_analyst analysis written — no findings — input ambiguous
 ```
 
 The orchestrator already knows `{output_path}` (it set it before dispatch) and reads the file directly; including the path in the 1-line is redundant. The literal sentinel `— no findings —` (em-dash, space, "no findings", space, em-dash) is what the orchestrator's empty-input contract checks for. No other text after the 1-line.

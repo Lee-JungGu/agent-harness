@@ -77,6 +77,8 @@ Before starting a new task, check if `.harness/state.json` already exists **and*
 
    **(M5) Dynamic Resume description override for `critic_halted`**: when `state.json.phase == "critic_halted"` (terminal), the Resume option does not advance any phase — it only surfaces the manual-intervention message defined in the `critic_halted` action below. To prevent users from selecting Resume expecting auto-progress, override the Resume option's description (in `user_lang`) to: "Surface manual intervention message only — no automatic phase advance possible from `critic_halted`." Keep the label "Resume" so the option key remains stable; make the action explicit through the description.
 
+   **(M14) Dynamic Resume description override for pre-8.4 sessions** (NEW in 8.4 hardening): if `state.conventions` is `null` (the 8.4 schema field) AND `state.phase` is `qa_complete` / `gen_ready` / `qa_active` (any phase that would route into Phase 2a-D), the session was created under a pre-8.4 `/spec` and resuming it under 8.4 will hit the Phase 2a-D step 3 null-conventions hard-error halt before producing useful output. Override the Resume option description (in `user_lang`) to: "Pre-8.4 session detected — Convention Scan (Step 1.5) will re-run before Phase 2 to populate conventions. Existing Q&A answers are preserved." On Resume selection, route through Step 1.5 first (regardless of `phase`), then jump to the matching `phase` step. Keep the option label "Resume" stable.
+
    Actions per selection:
    - **Resume**: Jump to the step matching state.json phase:
      - `setup` → Step 1
@@ -129,6 +131,18 @@ When the user provides a task description (via $ARGUMENTS or in conversation), e
 
 1. **Detect user language** from the task description. Store as `user_lang`.
 2. **Slugify the task:** lowercase, transliterate non-ASCII to ASCII, remove non-word chars except hyphens, replace spaces with hyphens, truncate to 50 chars. Store as `<slug>`.
+
+   **(M15) Slug collision check** (NEW in 8.4 hardening): before creating directories in step 3, check whether `docs/harness/<slug>/` already contains any of the spec-persisted artifacts (`spec.md`, `qa_notes.md`, `critic_findings.md`, `conventions.md`). If yes, the slug collides with a prior /spec run — Phase 3 step 3 would silently overwrite those artifacts on cleanup. Resolve via AskUserQuestion (translate to `user_lang`):
+   ```
+   header: "Slug collision"
+   question: "docs/harness/<slug>/ already contains spec artifacts from a prior run. Continuing will overwrite them at Phase 3."
+   options:
+     - label: "Append timestamp" / description: "Use slug-<UTC-YYYYMMDDHHMMSS> (e.g. <slug>-20261231235959) to preserve prior artifacts"
+     - label: "Overwrite" / description: "Continue with this slug; prior artifacts WILL be overwritten at Phase 3"
+     - label: "Stop" / description: "Halt — choose a different task description and retry"
+   ```
+   On "Append timestamp", recompute `<slug>` accordingly (the timestamp suffix keeps slug ≤ 50 chars by truncating the base slug to 35 chars before suffixing). On "Stop", halt. On "Overwrite", proceed.
+
 3. **Create directories:** `.harness/`, `.harness/spec/`, `docs/harness/<slug>/`
 4. **Create git branch (if has_git):** `git checkout -b harness/spec-<slug>`. If `has_git == false`, skip this step entirely.
 4.5. **Parse `--reference <path>` flag (NEW in 8.4):**
@@ -177,7 +191,7 @@ When the user provides a task description (via $ARGUMENTS or in conversation), e
    - `docs_path` — `"docs/harness/<slug>/"`
    - `created_at` — ISO8601 timestamp
    - `cli_flags.reference` (NEW in 8.4) — `null` if `--reference` not provided, or the normalized **repo-relative path** (relative to `repo_path`; no leading `/` or drive letter). Must be a value that has passed Path Validator (`kind=file_reference`) — see step 4.5.
-   - `conventions` (NEW in 8.4) — `null` (Step 1.5 not yet executed), `"skipped"` (user explicitly chose Skip), or `"file:.harness/conventions.md"` (literal sentinel; see §Step 1.5 contract)
+   - `conventions` (NEW in 8.4) — `null` (Step 1.5 not yet executed), `"skipped"` (user explicitly chose Skip), or `"file:.harness/conventions.md"` (literal sentinel). <!-- SYNC-WITH: skills/spec/SKILL.md §Step 1.5 conventions field contract -->. See §Step 1.5 conventions field contract for the canonical allowed-value list.
    - `critic` (NEW in 8.4) — `null` (Phase 2c-D not reached) or object:
      ```
      {
@@ -210,7 +224,7 @@ When the user provides a task description (via $ARGUMENTS or in conversation), e
 
 This step runs after Setup and before Phase 1 Q&A. It populates `state.conventions` for downstream analyst injection.
 
-**`conventions` field contract** (mirrors workflow) — **(s3) canonical source for allowed values of `state.conventions`**; the state.json schema doc above (`conventions` field at line ~180) cross-references this section and gives a brief enumeration only — when changing allowed values, edit this section first, then mirror the brief enumeration in the schema doc:
+**`conventions` field contract** (mirrors workflow) — **(s3) canonical source for allowed values of `state.conventions`**; the state.json schema doc above ("§Step 1 step 7 schema doc — `conventions` field" — section anchor, not line number, to survive future edits) and `skills/workflow/SKILL.md` (`§Conventions injection rule`) both cross-reference this section. **(M16) SYNC-WITH markers**: when changing allowed values, edit this section FIRST, then update (a) the state.json schema doc above, (b) `skills/workflow/SKILL.md §Conventions injection rule` enum, and (c) any planner-template `Conventions injection:` blocks in workflow Step 2 — all three locations carry a `<!-- SYNC-WITH: skills/spec/SKILL.md §Step 1.5 conventions field contract -->` HTML comment so a CI lint pass can detect drift. The current allowed value set is:
 - `null` → Step 1.5 not yet executed
 - `"skipped"` → user explicitly chose to skip
 - `"file:.harness/conventions.md"` → conventions copied locally; analysts inject via `{conventions}` variable. The `"file:"` prefix is a literal sentinel (NOT a URI scheme), and the orchestrator always emits the exact string `"file:.harness/conventions.md"` — no platform-specific path with embedded colons (e.g. Windows `C:\...`) is ever assigned to `state.conventions`, so prefix detection via `startswith("file:")` cannot collide with absolute paths.
@@ -238,7 +252,8 @@ This step runs after Setup and before Phase 1 Q&A. It populates `state.conventio
      - `cwd/docs/style-guide.md`
      - `cwd/docs/conventions.md`
    - **Symlink policy (applied FIRST)**: if `Path(p).is_symlink()` is true, reject the candidate (skip with warn). This blocks symlink-based escape attempts before any further checks.
-   - **Excluded directories (applied to non-symlink resolved paths)**: reject any candidate whose resolved real path contains one of `node_modules/`, `.git/`, `vendor/`, `dist/`, `build/`, `.next/`, `__pycache__/`, `.venv/`, `target/` as any path segment. (m3: explicit two-phase order — symlink check first, then segment check on the verified-non-symlink path; prevents redundant double-handling of the same edge case where a symlink points into an excluded dir.)
+   - **CWD containment check (NEW in 8.4 hardening)**: even after the leaf symlink check, the candidate's resolved real path MUST satisfy `Path(p).resolve()` ⊆ `Path.cwd().resolve()` so that an *intermediate* directory symlink (e.g. cwd or `cwd/docs/` itself being a symlink to an external location) cannot be used to escape the current project. If `resolve()` shows a path outside `cwd.resolve()`, reject with warn `[harness] ⚠ <p> resolves outside cwd; rejecting`. This mirrors the `--reference` flag's `validate_path(kind=file_reference)` containment guarantee for the auto-detect branch (which has no `repo_path` to compare against — falls back to `cwd`).
+   - **Excluded directories (applied to non-symlink resolved paths)**: reject any candidate whose resolved real path contains one of `node_modules/`, `.git/`, `vendor/`, `dist/`, `build/`, `.next/`, `__pycache__/`, `.venv/`, `target/` as any path segment. (m3: explicit two-phase order — symlink check first, then containment check, then segment check on the verified-non-symlink path; prevents redundant double-handling of the same edge case where a symlink points into an excluded dir.)
    - Filter to files with >= 50 lines AND <= 5000 lines AND <= 200 KB (size cap mirrors `--reference`).
    - 0 matches → set `conventions → "skipped"`.
    - 1 match → copy content to `.harness/conventions.md`, set conventions accordingly.
@@ -387,7 +402,7 @@ Print status in the standard format, prefixed with `[harness] Spec draft ready.`
    - Output file missing after dispatch → retry × 2 → if still missing, write a 1-line fallback to the expected path: `<persona> analysis written — dispatch failed`, and emit user warn `[harness] ⚠ <persona> dispatch failed after retries`.
    - 1-line parse failure → write a distinct fallback line `<persona> analysis written — parse failed` and emit warn `[harness] ⚠ <persona> 1-line parse failed`.
 
-7. **Empty-input contract check:** if all 4 analyst 1-lines contain the literal sentinel `— no findings —` (em-dash, space, "no findings", space, em-dash) AND none contain `dispatch failed` or `parse failed`, set `state.critic = { applied: "approved", round: 0, last_findings_path: null, failure_reason: null }` and skip Phase 2c-D / 2d-D only (Phase 2b-D Synthesis still runs — it produces `spec.md` from `task_description` + `qa_discovery_notes` + the four "no findings" analysis files; Synthesis output is then routed directly to HARD-GATE because of the `state.critic.applied = "approved"` signal that Phase 2b-D step 6 reads).
+7. **Empty-input contract check:** if **every dispatched analyst's** 1-line (count = number of analyst templates listed in step 1; currently 4 in 8.4 — `requirements_analyst`, `user_scenario_analyst`, `risk_auditor`, `tech_constraint_analyst` — but the orchestrator MUST iterate over the actual dispatched set rather than hard-coding `4` so that adding a 5th analyst in a future release does not silently break this check) contains the literal sentinel `— no findings —` (em-dash, space, "no findings", space, em-dash) AND none contain `dispatch failed` or `parse failed`, set `state.critic = { applied: "approved", round: 0, last_findings_path: null, failure_reason: null }` (single atomic write per §Atomicity Contract) and skip Phase 2c-D / 2d-D only (Phase 2b-D Synthesis still runs — it produces `spec.md` from `task_description` + `qa_discovery_notes` + the analyst "no findings" files; Synthesis output is then routed directly to HARD-GATE because of the `state.critic.applied = "approved"` signal that Phase 2b-D step 6 reads).
 
    **Single-source-of-truth contract**: `state.critic.applied` is the only authoritative signal for whether Critic ran. Phase 2a-D step 7 sets it eagerly; Phase 2b-D step 6 reads it as the sole gate to bypass Phase 2c-D. Do NOT add parallel decision logic in any other phase that diverges from this signal.
 
@@ -435,7 +450,7 @@ Print status in the standard format, prefixed with `[harness] Spec draft ready.`
 3. Dispatch Critic sub-agent. Model: `model_config.advisor` (or default if preset == "default") — same pattern as Synthesis.
 
 4. **Failure handling:**
-   - Crash/timeout → retry × 2 → if still failing, set `critic.applied = "approved"`, `critic.round = 0`, `critic.failure_reason = "dispatch_failed"`, `phase → "critic_complete"` and emit warn `[harness] ⚠ Critic dispatch failed — proceeding without findings. Manual review recommended at Final HARD-GATE.` Skip to Final HARD-GATE. (`failure_reason` distinguishes silent-degraded approval from genuine 0-issue approval; Final HARD-GATE displays this state to the user.)
+   - Crash/timeout → retry × 2 → if still failing, set `critic.applied = "approved"`, `critic.round = 0`, `critic.last_findings_path = null` (no findings file produced), `critic.failure_reason = "dispatch_failed"`, `phase → "critic_complete"` (single atomic write per §Atomicity Contract) and emit a **prominent warning banner** in `user_lang`: `[harness] ⚠⚠⚠ CRITIC DISPATCH FAILED — auto-approved without quality review. Recommend manual spec review before /workflow handoff.` Skip to Final HARD-GATE; HARD-GATE display MUST surface `failure_reason="dispatch_failed"` as a visible banner (not buried in summary text) so automation pipelines do not miss the silent-quality-degradation signal.
    - 1-line parse failure → emit warn `[harness] ⚠ Critic 1-line parse failed — manual review required. critic_findings.md may have content; do NOT auto-approve.` Then present **Critic Parse-Fail Gate** via AskUserQuestion (translate header/question/options to `{user_lang}`):
 
      ```
@@ -446,10 +461,12 @@ Print status in the standard format, prefixed with `[harness] Spec draft ready.`
        - "Stop" / "Halt — manual intervention needed"
      ```
 
-     - Approve as-is → set `critic.applied = "approved"`, `critic.round = 0`, `critic.failure_reason = "parse_failed_approved"`, `phase → "critic_complete"`. Skip to Final HARD-GATE. (`failure_reason` lets HARD-GATE display "user manually approved despite parse failure" vs genuine approval.)
+     - Approve as-is → set `critic.applied = "approved"`, `critic.round = 0`, `critic.last_findings_path = ".harness/spec/critic_findings.md"` (file exists with malformed-1-line content), `critic.failure_reason = "parse_failed_approved"`, `phase → "critic_complete"` (single atomic write). Skip to Final HARD-GATE. (`failure_reason` lets HARD-GATE display "user manually approved despite parse failure" vs genuine approval.)
      - Stop → set `phase → "critic_halted"`, `critic.failure_reason = "parse_failed_halted"`, halt session, leave state.json intact (no auto-approve on parse failure). Session Recovery will surface this state to the user as "Critic flow halted — manual intervention required" rather than auto-resuming.
 
-5. Parse 1-line via regex `^critic_findings written — Critical=(\d+), Major=(\d+), Minor=(\d+)$`: extract three integer counts. Whitespace tolerance: allow `\s*` between tokens. Any deviation triggers the 1-line parse failure path in step 4.
+5. Parse 1-line via regex `^critic_findings written — Critical=(\d+), Major=(\d+), Minor=(\d+)$` (run with `re.MULTILINE` and a `.strip()` preprocess on the response so trailing newlines do not defeat anchoring): extract three integer counts. Whitespace tolerance: allow `\s*` between tokens. Any deviation triggers the 1-line parse failure path in step 4.
+
+5.5. **Persist findings path** (NEW in 8.4): set `state.critic.last_findings_path = ".harness/spec/critic_findings.md"`. This single set covers all step 6 branches (and the 2nd-round Critic re-dispatch via Phase 2d-D step 3 — which loops back through this Phase 2c-D step 5.5). Session Recovery into `critic_active` with `applied="pending"` reads this field to re-display the Critic Gate without re-dispatching Critic; without this set, the field stays null from Phase 2a-D step 7 init and Recovery has no path to read.
 
 6. **Branching:**
    - `Critical=0 AND Major=0` → set `critic.applied = "approved"`, `critic.round = 0`, `phase → "critic_complete"`. Proceed to Final HARD-GATE (Minor count and findings file shown for context).

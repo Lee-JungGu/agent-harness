@@ -459,7 +459,7 @@ Otherwise (fresh /workflow session, or `.harness/conventions.md` missing):
 - `"skipped"` → user explicitly chose to skip convention scan
 - `"file:<path>"` → conventions available at the given path (e.g., `"file:.harness/conventions.md"`)
 
-**Conventions injection rule (used by Step 2):** When `conventions` starts with `"file:"`, read the file at the path after the prefix. If the file does not exist, treat as `null` and re-run Step 1.5. When `conventions` is `null` or `"skipped"`, pass `{conventions}` as empty string.
+**Conventions injection rule (used by Step 2):** When `conventions` starts with `"file:"`, read the file at the path after the prefix. If the file does not exist, treat as `null` and re-run Step 1.5. When `conventions` is `null` or `"skipped"`, pass `{conventions}` as empty string. <!-- SYNC-WITH: skills/spec/SKILL.md §Step 1.5 conventions field contract -->
 
 ---
 
