@@ -210,7 +210,7 @@ This step runs after Setup and before Phase 1 Q&A. It populates `state.conventio
 
 **Shared file ownership note** (NEW in 8.4 hardening): `.harness/conventions.md` is shared between `/spec` and `/workflow` skills (both write and read it via the same path). To prevent contract drift:
 - **Writer authority**: only the skill currently in its Step 1.5 phase (whichever ran most recently) is authoritative for the file's contents.
-- **Lifetime**: the file persists across `/spec` → `/workflow` handoff (do NOT delete during /spec Phase 3 cleanup; see Phase 3 Handoff in Task 13).
+- **Lifetime**: the file's *contents* persist across `/spec` → `/workflow` handoff via the Phase 3 step 3 copy to `docs/harness/<slug>/conventions.md` (executed BEFORE cleanup). The original `.harness/conventions.md` itself is then deleted with the rest of `.harness/` in Phase 3 step 4 — it is NOT a long-lived file. The durable snapshot lives at `docs/harness/<slug>/conventions.md` and is what `/workflow` Step 1.5 reads during handoff.
 - **Schema sync**: if either skill changes the `conventions` field's allowed values (`null` / `"skipped"` / `"file:..."` literal), both skills must be updated together — otherwise the receiving skill silently accepts an unknown form.
 
 **Order of evaluation:**
@@ -543,13 +543,13 @@ Update state.json: `phase` → `"completed"`.
        - label: "Start /workflow" / description: "Launch implementation workflow using this spec"
        - label: "Done" / description: "Keep the spec for later use"
 
-   If user selects "Start /workflow": invoke `/workflow --output-dir docs/harness/<slug>/ "Implement based on spec.md"` (translate the quoted string to `user_lang`).
+   If user selects "Start /workflow": **first run step 3 (persist artifacts) and step 4 (cleanup), THEN** invoke `/workflow --output-dir docs/harness/<slug>/ "Implement based on {docs_path}spec.md"` (translate the quoted string to `user_lang`). This ordering is critical (C1): persisting artifacts BEFORE invoke ensures `/workflow` Step 1.5 / Step 2 can actually read `qa_notes.md` / `critic_findings.md` / `conventions.md` from `{docs_path}` — invoking first would short-circuit step 3 and make the persistence contract a no-op. The explicit `{docs_path}spec.md` form (vs bare `spec.md`) documents the path-assembly contract at the call site so future maintainers don't mistake the bare filename for a working-dir lookup.
 
    The `--output-dir` argument is **load-bearing** for slug-safe handoff: without it, `/workflow` re-slugifies its own task description and writes to a different `docs/harness/<re-slug>/` directory — silently bypassing the artifacts persisted in step 3 below. Always pass `--output-dir docs/harness/<slug>/` so `/workflow`'s `docs_path` matches `/spec`'s `docs_path` exactly.
 
-   If user selects "Done": clean up `.harness/` (per step 4) and halt.
+   If user selects "Done": **first run step 3 (persist artifacts) and step 4 (cleanup)**, then halt. Persisting artifacts on the "Done" path preserves `qa_notes.md` / `critic_findings.md` / `conventions.md` so a future `/workflow` session invoked manually via `--output-dir docs/harness/<slug>/` can still consume them.
 
-3. **Persist spec artifacts to `{docs_path}` (NEW in 8.4)** — BEFORE cleanup, copy the following files from `.harness/` into `docs/harness/<slug>/` (only when the source file exists; skip silently if missing):
+3. **Persist spec artifacts to `{docs_path}` (NEW in 8.4)** — BEFORE cleanup, **ensure `{docs_path}` exists** (`Path(docs_path).mkdir(parents=True, exist_ok=True)` or equivalent — idempotent and safe even though Setup step 3 already created it; Session Recovery paths may have bypassed that step). Then copy the following files from `.harness/` into `docs/harness/<slug>/` (only when the source file exists; skip silently if missing):
    - `.harness/spec/qa_notes.md` → `docs/harness/<slug>/qa_notes.md`
    - `.harness/spec/critic_findings.md` → `docs/harness/<slug>/critic_findings.md`
    - `.harness/conventions.md` → `docs/harness/<slug>/conventions.md`
@@ -647,5 +647,5 @@ All user-facing questions MUST use AskUserQuestion tool when available.
 - **Analyst proposals must be independent.** Never share one analyst's findings with another during parallel analysis.
 - **Section mapping must be preserved.** The seven spec sections must appear in every spec for /workflow compatibility.
 - **User language.** All user-facing output must be in `user_lang`. Re-detect on every user message.
-- **Intermediate outputs are ephemeral.** Only `spec.md` is preserved in `docs/`. `.harness/` is cleaned up after completion.
+- **Intermediate outputs are ephemeral.** Only `spec.md` and the Phase 3 persisted artifacts (`qa_notes.md`, `critic_findings.md`, `conventions.md`) are preserved in `docs/harness/<slug>/`. All other `.harness/` contents are cleaned up after completion.
 - **skill field is "spec".** state.json must always have `skill: "spec"` — session recovery depends on this.
