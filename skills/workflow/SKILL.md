@@ -517,12 +517,22 @@ When dispatching ANY planner template (`architect.md`, `senior_developer.md`, `q
 
 Backward compat: pre-8.4 sessions where these files do not exist receive empty strings — templates render the `## Discovery Notes from Spec Phase` section with empty sub-bodies, which is harmless.
 
+**(M10) Common dispatch variable set (canonical — referenced by all 3 mode-specific dispatch steps):** every planner sub-agent receives the following template variables; mode-specific dispatch steps below say "Common dispatch variable set + <extras>" instead of re-enumerating, so a future variable addition only updates this canonical list:
+- `{task_description}` — from state.json
+- `{repo_path}` — from state.json (or `cwd` for greenfield)
+- `{lang}` — from state.json (project primary language detection)
+- `{scope}` — from state.json (file scope filter)
+- `{user_lang}` — from state.json
+- `{qa_discovery_notes}` — prepared above (always pass; empty string fallback)
+- `{critic_findings}` — prepared above (always pass; empty string fallback)
+- `{conventions}` — derived from `state.conventions` per `§Conventions injection rule` (always pass; empty string fallback)
+Mode-specific dispatch steps add `{output_path}` (architect/senior_developer/qa_specialist) or `{spec_path}` (planner_single only).
+
 #### Step 2 — single mode
 
 1. Update phase → `"planning"`.
 2. Read template: `{CLAUDE_PLUGIN_ROOT}/templates/planner/planner_single.md`
-3. **Dispatch 1 sub-agent** with prompt built from template variables: `{task_description}`, `{repo_path}`, `{lang}`, `{scope}`, `{user_lang}`, `{qa_discovery_notes}`, `{critic_findings}`, `{spec_path}` = `{docs_path}spec.md`.
-   - **Conventions injection:** If `conventions` in state.json starts with `"file:"`, extract the path after the prefix, read the file content, and pass as `{conventions}`. If `conventions` is `null`, `"skipped"`, or the referenced file does not exist, pass `{conventions}` as empty string.
+3. **Dispatch 1 sub-agent** with prompt built from the **Common dispatch variable set** (see §Step 2 Discovery Notes Injection above) plus mode-specific extra `{spec_path}` = `{docs_path}spec.md`.
    - Model: if preset ≠ "default", use `model_config.advisor`.
 4. Parse return → extract first line. Print: `  ✓ {first line}`
 5. Verify `spec.md` exists.
@@ -534,8 +544,7 @@ Backward compat: pre-8.4 sessions where these files do not exist receive empty s
 
 1. Update phase → `"planning"`.
 2. Read templates: `architect.md`, `senior_developer.md`
-3. **Dispatch 2 sub-agents in parallel.** Each gets: `{task_description}`, `{repo_path}`, `{lang}`, `{scope}`, `{user_lang}`, `{qa_discovery_notes}`, `{critic_findings}`, `{output_path}` = `.harness/planner/proposal_<persona>.md`.
-   - **Conventions injection:** If `conventions` starts with `"file:"`, read the file and pass as `{conventions}`. If `null`, `"skipped"`, or file missing, pass empty string.
+3. **Dispatch 2 sub-agents in parallel.** Each gets the **Common dispatch variable set** (see §Step 2 Discovery Notes Injection above) plus mode-specific extra `{output_path}` = `.harness/planner/proposal_<persona>.md`.
    - Model: if preset ≠ "default", use `model_config.advisor`.
 4. Parse returns. Print: `  ✓ 2 proposals generated`
 5. Verify both proposal files exist.
@@ -555,8 +564,7 @@ Backward compat: pre-8.4 sessions where these files do not exist receive empty s
 
 1. Update phase → `"planning"`.
 2. Read templates: `architect.md`, `senior_developer.md`, `qa_specialist.md`
-3. **Dispatch 3 sub-agents in parallel.** Each gets template vars + `{qa_discovery_notes}` + `{critic_findings}` + `{output_path}` = `.harness/planner/proposal_<persona>.md`.
-   - **Conventions injection:** If `conventions` starts with `"file:"`, read the file and pass as `{conventions}`. If `null`, `"skipped"`, or file missing, pass empty string.
+3. **Dispatch 3 sub-agents in parallel.** Each gets the **Common dispatch variable set** (see §Step 2 Discovery Notes Injection above) plus mode-specific extra `{output_path}` = `.harness/planner/proposal_<persona>.md`.
    - Model: if preset ≠ "default", use `model_config.advisor`.
 4. Parse returns. Print: `  ✓ 3 proposals generated`
 5. Verify all 3 proposal files exist.
