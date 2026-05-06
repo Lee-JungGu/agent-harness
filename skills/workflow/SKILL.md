@@ -433,12 +433,16 @@ If `model_config.verifier` is `sonnet` or `opus`, also print:
 
 **Persisted Spec Artifacts Check (NEW in 8.4):**
 
-Before running CLAUDE.md richness check, look for `{docs_path}conventions.md` (persisted by /spec Phase 3 in slug-matched directory):
+Before running CLAUDE.md richness check, look for `{docs_path}conventions.md` (persisted by /spec Phase 3 in slug-matched directory). **(m7)** `{docs_path}` is read from state.json (set by Step 1 step 7 — see §state.json schema).
 
-- File exists → copy content to `.harness/conventions.md`, set `state.conventions → "file:.harness/conventions.md"`, skip the rich/sparse/missing trichotomy entirely. Proceed to Step 2 (Plan).
-- File does NOT exist → proceed with the existing CLAUDE.md richness flow below.
+**(M2) Skip condition for resume**: If `state.conventions == "file:.harness/conventions.md"` AND `.harness/conventions.md` already exists (e.g., a prior /workflow session scanned conventions itself, then the session was paused and resumed), skip this entire Persisted Spec Artifacts Check and proceed directly to the existing CLAUDE.md richness flow below — the live `.harness/conventions.md` is authoritative for resumed /workflow sessions and must NOT be overwritten by a possibly-stale `/spec` copy.
 
-**Resume idempotency:** if `state.conventions == "file:.harness/conventions.md"` but `.harness/conventions.md` is missing (e.g., `.harness/` was deleted), the persisted check re-copies from `{docs_path}conventions.md` if still present. **If both `.harness/conventions.md` AND `{docs_path}conventions.md` are missing**, reset `state.conventions = null` and fall through to the existing CLAUDE.md richness flow (treat as fresh execution — no convention context available).
+Otherwise (fresh /workflow session, or `.harness/conventions.md` missing):
+
+- File `{docs_path}conventions.md` exists → copy content to `.harness/conventions.md`, set `state.conventions → "file:.harness/conventions.md"`, skip the rich/sparse/missing trichotomy entirely. Proceed to Step 2 (Plan).
+- File `{docs_path}conventions.md` does NOT exist → proceed with the existing CLAUDE.md richness flow below.
+
+**Resume idempotency:** if `state.conventions == "file:.harness/conventions.md"` but `.harness/conventions.md` is missing (e.g., `.harness/` was deleted between sessions) AND the M2 skip condition above did NOT trigger, the persisted check re-copies from `{docs_path}conventions.md` if still present. **If both `.harness/conventions.md` AND `{docs_path}conventions.md` are missing**, reset `state.conventions = null` and fall through to the existing CLAUDE.md richness flow (treat as fresh execution — no convention context available).
 
 **CLAUDE.md Richness Check:**
 
@@ -505,6 +509,8 @@ Before any planner sub-agent dispatch, prepare:
 - `critic_findings` = read content of `{docs_path}critic_findings.md` if exists, else empty string `""`.
 
 When dispatching ANY planner template (`architect.md`, `senior_developer.md`, `qa_specialist.md`, `planner_single.md`), pass `{qa_discovery_notes}` and `{critic_findings}` as keyword variables (always — even when empty, to avoid `str.format()` KeyError on the new placeholders).
+
+**(m4) Scope of injection**: this injection applies ONLY to the initial proposal dispatch sub-agents — single mode dispatch (Step 2 single mode step 3) + standard/multi mode 2a "Independent Proposals" dispatches. Synthesis (standard 2b, multi 2c) and Cross-Critique (multi 2b) sub-agents do NOT receive `{qa_discovery_notes}` / `{critic_findings}` directly — they read proposal files which already incorporate this context (each proposal sub-agent at 2a-time received the Discovery Notes and embedded the relevant insights into its proposal output). Do NOT double-inject downstream; the synthesis/cross-critique templates do not declare these placeholders.
 
 Backward compat: pre-8.4 sessions where these files do not exist receive empty strings — templates render the `## Discovery Notes from Spec Phase` section with empty sub-bodies, which is harmless.
 
@@ -973,12 +979,19 @@ Ask via AskUserQuestion (in `user_lang`):
   - "No commit" / "Clean .harness/ only, keep changes in working tree"
 
 Actions (apply Safety Guard before each delete):
-- "Commit code only": (NEW in 8.4 — protect persisted spec artifacts) BEFORE deleting `{docs_path}`, stage these spec-persistence files for commit if they exist (do NOT error if missing):
-  - `{docs_path}qa_notes.md`
-  - `{docs_path}critic_findings.md`
-  - `{docs_path}conventions.md`
-  
-  After staging, delete `.harness/`, delete `{docs_path}` (the staged files persist in the commit's tree; they're removed from the working directory but recoverable from git history). Commit code. The final commit contains code changes + the 3 spec artifacts.
+- "Commit code only": (NEW in 8.4 — protect persisted spec artifacts) Apply this exact 5-step sequence:
+  1. **(M8) Safety Guard validation** on `{docs_path}` — apply the full Artifact Cleanup Safety Guard above (slug check + path depth + `Path.cwd()` containment) BEFORE any staging or deletion. If validation fails, **ABORT**: do NOT stage, do NOT delete. Surface the failed check to the user. Both `.harness/` and `{docs_path}` remain intact for manual recovery.
+  2. **Stage spec-persistence files** for commit (only if the source file exists — silently skip missing files):
+     - `{docs_path}qa_notes.md`
+     - `{docs_path}critic_findings.md`
+     - `{docs_path}conventions.md`
+     
+     **(s4) Per-file staging failure handling**: if `git add <file>` fails for a specific file (permission, .gitignore conflict, etc.), warn the user (in `user_lang`): "Failed to stage `<file>`: <error>. Spec artifact may not be in git history." Continue with remaining files — do NOT abort the whole sequence on a single staging failure. The code commit (step 5) is more critical than any individual artifact preservation.
+  3. **Delete `.harness/`** (the Safety Guard already validated the parent context).
+  4. **Delete `{docs_path}`** working-directory contents.
+  5. **Commit** code changes plus the staged spec artifacts.
+
+  **(m2) git index vs working directory note**: between step 2 (stage) and step 4 (delete working dir), the spec artifact files are staged in the git index but then removed from the working directory. This is correct behavior — `git add` captures a snapshot to the index at stage-time; a subsequent working-directory `rm` does NOT mark the staged files as deleted in the index (a working-tree-only delete after index-stage is a no-op for the index — it only changes the working tree, not the staged content). The final commit (step 5) therefore includes the 3 staged artifacts as additions even though they no longer exist on disk; they remain recoverable from git history.
 - "Commit all": delete `.harness/`, stage + commit `{docs_path}` + code
 - "No commit": delete `.harness/` only
 
