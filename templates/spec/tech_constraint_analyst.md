@@ -38,11 +38,11 @@ Analyze the task and Q&A notes from a **technical constraint perspective**. Work
 
 1. **Codebase conflicts** — Identify naming clashes, existing patterns that the spec contradicts, module dependency direction violations, and parallel implementations of existing functionality. For each, cite the existing pattern.
 
-2. **Convention violations** — Identify CLAUDE.md / convention rules the spec implicitly violates (e.g., "BaseEntity 중복 선언", "Setter 금지", "JPQL @Query 사용 금지"). Each item must reference the specific convention.
+2. **Convention violations** — Identify rules in `{conventions}` (CLAUDE.md / STYLE_GUIDE.md / equivalent) the spec implicitly violates. Examples are stack-agnostic: "redeclaring fields already inherited from a base type", "using a setter on an entity declared as immutable", "using a query mechanism the project conventions forbid", "naming pattern X violated by proposed identifier Y". Each item must cite the specific convention rule from `{conventions}` (do NOT invent rules; if `{conventions}` is empty/skipped/greenfield, this section yields `None detected for this task.`).
 
-3. **DB / Schema constraints** — Identify FK considerations, NOT NULL implications, shard_seq requirements, missing indices for declared queries, and incompatible column types. Flag any DDL change.
+3. **DB / Schema constraints (static schema definition focus)** — Identify static schema-definition issues distinct from runtime/migration risks (which belong to risk_auditor): NOT NULL column declarations vs nullable code-side mappings, FK target table existence, shard/tenant column requirements declared by base entities, missing indices for declared query patterns, and incompatible column types. Flag any DDL CHANGE for risk_auditor's runtime lens — your concern is the static definition, not the runtime deployment.
 
-4. **Operational / deployment impact** — Identify Bean scan range issues, scheduler config requirements, environment variable additions, deployment-order dependencies, and infrastructure prerequisites.
+4. **Operational / deployment impact (static config focus)** — Identify configuration declarations the spec implies: bean scan range definition, scheduler config registration, environment variable declarations, deployment-order dependencies, and infrastructure prerequisites. Static contract — leave deployment-time race conditions to risk_auditor.
 
 5. **For `[unconfirmed]` Q&A items** — call out which technical constraints become assumptions and the risk if those assumptions are wrong.
 

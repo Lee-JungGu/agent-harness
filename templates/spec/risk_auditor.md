@@ -42,7 +42,7 @@ Analyze the task and Q&A notes from a **risk perspective**. Work independently �
 
 3. **Data integrity risks** — Identify rollback scenarios, partial failure handling, eventual-consistency assumptions, and orphaned records. Treat any "happy path only" requirement as a red flag.
 
-4. **Migration risks** — Identify DDL impacts (NOT NULL additions, FK changes, type changes), backward-compatibility breaks, deployment-time race conditions, and schema-vs-code drift potential.
+4. **Migration risks (runtime / deployment focus)** — Identify *runtime* risks of DDL changes: deployment-time race conditions during a migration window, partial-failure recovery if a migration aborts mid-run, schema-vs-code drift exposed by rolling deployments, and backward-compatibility breaks visible to live traffic during the rollout. Static schema-definition issues (e.g., "this column should be NOT NULL given the base-type contract") are tech_constraint_analyst's lens, not yours; if you flag a DDL item, frame it as "deploying this change creates risk X" rather than "the schema definition is wrong" — the latter belongs to tech_constraint to avoid Synthesis double-counting.
 
 5. **For `[unconfirmed]` Q&A items** — explicitly call out which risks the unconfirmed item creates. Do not silently accept ambiguity.
 

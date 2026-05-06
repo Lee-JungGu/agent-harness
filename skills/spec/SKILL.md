@@ -87,7 +87,7 @@ Before starting a new task, check if `.harness/state.json` already exists **and*
      - `qa_complete` → Phase 2 Spec Generation (entry)
      - `gen_ready` → Phase 2 Spec Generation (entry)
      - `critic_active` (NEW in 8.4, deep mode) — branch on `state.critic.applied`:
-       - `"approved"` → skip directly to Final HARD-GATE (Critic already concluded). **(m5) Reachability note**: in normal execution Phase 2c-D step "Approve as-is" (line ~466) writes `critic.applied = "approved"` then `phase = "critic_complete"` in that order; a crash *between* those two non-atomic state.json writes is the only path that leaves `phase == "critic_active" AND critic.applied == "approved"`. This branch handles that recovery edge case.
+       - `"approved"` → skip directly to Final HARD-GATE (Critic already concluded). **(m5) Reachability note**: in normal execution **Phase 2c-D step 6 "Approve as-is selected" branch** wrote `critic.applied = "approved"` then `phase = "critic_complete"` in that order *before* the §Atomicity Contract was added; a crash *between* those two legacy non-atomic state.json writes is the only path that leaves `phase == "critic_active" AND critic.applied == "approved"`. This branch handles that legacy recovery edge case. Under the 8.4 §Atomicity Contract (single-write rule), new transitions cannot reproduce this race; this Recovery branch is preserved for backward compatibility with pre-fix sessions.
        - `"pending"` → re-present Critic Gate using `state.critic.last_findings_path` (do NOT re-dispatch Critic — findings already exist)
        - `"revised"` → re-enter Phase 2d-D step 3 (re-Critic dispatch on revised spec.md)
        - otherwise (null/unknown) → re-dispatch Phase 2c-D Critic from start
@@ -586,6 +586,17 @@ Update state.json: `phase` → `"completed"`.
    - `.harness/conventions.md` → `docs/harness/<slug>/conventions.md`
 
    These artifacts are consumed by `/workflow` Step 1.5 (conventions reuse — skip rescan if `docs/harness/<slug>/conventions.md` exists) and `/workflow` Step 2 (planner dispatch fills `{qa_discovery_notes}` from `qa_notes.md` and `{critic_findings}` from `critic_findings.md`). Without persistence, `/workflow` falls back to its own Convention Scan and dispatches planners with empty Discovery Notes — producing less context-aware plans. Note: `.harness/conventions.md` is the shared file documented under the Step 1.5 ownership note; copying to `docs/harness/<slug>/` makes the snapshot durable across the spec→workflow handoff regardless of any subsequent /workflow Convention Scan run.
+
+   **(M17) Variable ↔ filename mapping** (NEW in 8.4 hardening) — the persisted file names use snake_case short forms while template variable placeholders use longer descriptive names. This intentional asymmetry separates "what is on disk" from "how it appears in prose":
+
+   | Persisted filename (`docs/harness/<slug>/`) | Template variable placeholder | Site of consumption |
+   |---|---|---|
+   | `qa_notes.md` | `{qa_discovery_notes}` | analyst templates (spec) + 4 planner templates (workflow) |
+   | `critic_findings.md` | `{critic_findings}` | synthesis.md (spec re-synthesis) + 4 planner templates (workflow) |
+   | `conventions.md` | `{conventions}` | analyst templates + 4 planner templates |
+   | `spec.md` | `{spec_content}` (critic.md) / `{spec_path}` (planner_single.md) | critic.md (spec) + planner_single.md (workflow single mode) |
+
+   Do NOT rename either side without updating both: renaming the file (e.g., `qa_notes.md` → `qa_discovery_notes.md`) without updating Phase 3 step 3 here AND `/workflow` Step 1.5 / Step 2 read sites silently breaks the handoff (file-missing → empty-string fallback → planners receive empty Discovery Notes). Renaming the variable requires updating all template files that reference it — see grep `qa_discovery_notes` and `qa_notes` for the full surface.
 
 4. **Cleanup:** Delete `.harness/` directory (state.json, `spec/`, `conventions.md`, and the directory itself). The final `docs/harness/<slug>/spec.md` AND the artifacts persisted in step 3 are preserved. (Halted sessions do NOT reach this step — see Halt semantics in Phase 2d-D.)
 
