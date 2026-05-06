@@ -256,7 +256,8 @@ Retry loops:
      - **Step 1** Normalize: `\` → `/` (always, OS-independent). UNC pattern (`\\server\…` or `//server/…`) → halt with error: "UNC paths are not allowed."
      - **Step 2** Absolute path: matches `^/` or `^[A-Za-z]:/` → halt with error: "output-dir must be a relative path."
      - **Step 3** Segment `..`: `path.split("/")` — if any segment `== ".."` → halt with error: "output-dir must not contain '..'." (segment-exact check, not substring)
-     - **Step 4** Reserved first segment: `path.split("/")[0]` ∈ `{memory, spec, planner, generator, evaluator, verify, harness, .harness, docs}` → halt with error: "output-dir value starts with a reserved directory name." (first segment only — trailing slash stripped first; full-path comparison is NOT performed)
+     - **Step 4** Reserved first segment: `path.split("/")[0]` ∈ `{memory, spec, planner, generator, evaluator, verify, harness, .harness}` → halt with error: "output-dir value starts with a reserved directory name." (first segment only — trailing slash stripped first; full-path comparison is NOT performed)
+     - **Step 4.5** (NEW in 8.4) `docs` first-segment exception for `/spec → /workflow` slug-safe handoff: if `path.split("/")[0] == "docs"`, the second segment MUST be `harness` (i.e. path starts with `docs/harness/...`). Otherwise halt with error: "output-dir under docs/ must be docs/harness/..." Rationale: the default `output_base = "docs/harness"` always writes under this tree, so the standard /spec handoff value `docs/harness/<slug>/` is the only legitimate `docs/...` override; any other `docs/<other>/` first-segment override is rejected to prevent accidental writes outside the harness namespace.
      - If valid: normalize with trailing slash stripped, store in `cli_flags.output_dir`.
 3. **Slugify the task:** lowercase, transliterate non-ASCII to ASCII, remove non-word chars except hyphens, replace spaces with hyphens, truncate to 50 chars. Store as `<slug>`.
 4. **Auto-detect project language and commands.** Scan the working directory:
@@ -431,6 +432,48 @@ If `model_config.verifier` is `sonnet` or `opus`, also print:
 
 *This step runs after Setup and before Plan, in all modes.*
 
+**Persisted Spec Artifacts Check (NEW in 8.4):**
+
+Before running CLAUDE.md richness check, look for `{docs_path}conventions.md` (persisted by /spec Phase 3 in slug-matched directory). **(m7)** `{docs_path}` is read from state.json (set by Step 1 step 7 — see §state.json schema).
+
+**Evaluation order (NEW in 8.4 v2 hardening — explicit decision tree to remove M2 vs Resume idempotency ambiguity):**
+
+```
+IF  state.conventions == "file:.harness/conventions.md"  THEN
+    IF  .harness/conventions.md exists  THEN
+        // (M2) Skip — live .harness/conventions.md is authoritative on /workflow resume.
+        skip Persisted Spec Artifacts Check entirely.
+        proceed to CLAUDE.md richness flow below.
+    ELSE  IF  {docs_path}conventions.md exists  THEN
+        // Resume idempotency — re-copy /spec snapshot.
+        copy {docs_path}conventions.md → .harness/conventions.md.
+        proceed to Step 2 (Plan) — skip rich/sparse/missing trichotomy.
+    ELSE
+        // Both files missing — reset state and fall through.
+        state.conventions = null  (atomic single-write).
+        proceed to CLAUDE.md richness flow below (treat as fresh execution).
+    END
+ELIF  state.conventions IN { null, "skipped" }  THEN
+    // Fresh /workflow session OR explicitly skipped — fall through.
+    IF  {docs_path}conventions.md exists  THEN
+        copy {docs_path}conventions.md → .harness/conventions.md.
+        set state.conventions = "file:.harness/conventions.md".
+        proceed to Step 2 (Plan).
+    ELSE
+        proceed to CLAUDE.md richness flow below.
+    END
+END
+```
+
+**(M2) Skip condition for resume** (covered by the first IF branch above): If `state.conventions == "file:.harness/conventions.md"` AND `.harness/conventions.md` already exists (e.g., a prior /workflow session scanned conventions itself, then the session was paused and resumed), skip this entire Persisted Spec Artifacts Check and proceed directly to the existing CLAUDE.md richness flow below — the live `.harness/conventions.md` is authoritative for resumed /workflow sessions and must NOT be overwritten by a possibly-stale `/spec` copy.
+
+Otherwise (fresh /workflow session, or `.harness/conventions.md` missing — see decision tree above):
+
+- File `{docs_path}conventions.md` exists → copy content to `.harness/conventions.md`, set `state.conventions → "file:.harness/conventions.md"`, skip the rich/sparse/missing trichotomy entirely. Proceed to Step 2 (Plan).
+- File `{docs_path}conventions.md` does NOT exist → proceed with the existing CLAUDE.md richness flow below.
+
+**Resume idempotency:** if `state.conventions == "file:.harness/conventions.md"` but `.harness/conventions.md` is missing (e.g., `.harness/` was deleted between sessions) AND the M2 skip condition above did NOT trigger, the persisted check re-copies from `{docs_path}conventions.md` if still present. **If both `.harness/conventions.md` AND `{docs_path}conventions.md` are missing**, reset `state.conventions = null` (this reset MUST be a state.json atomic single-write read-modify-write — same single-write contract /spec defines in its §Atomicity Contract; do NOT only update in-memory because the next Session Recovery resume will re-read state.json and find the stale `"file:..."` value, looping the same fallback) and fall through to the existing CLAUDE.md richness flow (treat as fresh execution — no convention context available).
+
 **CLAUDE.md Richness Check:**
 
 1. Check if `CLAUDE.md` exists in the repository root.
@@ -445,7 +488,7 @@ If `model_config.verifier` is `sonnet` or `opus`, also print:
 - `"skipped"` → user explicitly chose to skip convention scan
 - `"file:<path>"` → conventions available at the given path (e.g., `"file:.harness/conventions.md"`)
 
-**Conventions injection rule (used by Step 2):** When `conventions` starts with `"file:"`, read the file at the path after the prefix. If the file does not exist, treat as `null` and re-run Step 1.5. When `conventions` is `null` or `"skipped"`, pass `{conventions}` as empty string.
+**Conventions injection rule (used by Step 2):** When `conventions` starts with `"file:"`, read the file at the path after the prefix. If the file does not exist, treat as `null` and re-run Step 1.5. When `conventions` is `null` or `"skipped"`, pass `{conventions}` as empty string. <!-- SYNC-WITH: skills/spec/SKILL.md §Step 1.5 conventions field contract -->
 
 ---
 
@@ -489,12 +532,36 @@ Update state.json: `phase → "plan_ready"`, `updated_at → now`.
 
 Print: `[harness] Phase: Plan`
 
+**Discovery Notes Injection (NEW in 8.4) — applies to all planner dispatches in single/standard/multi mode:**
+
+Before any planner sub-agent dispatch, prepare:
+- `qa_discovery_notes` = read content of `{docs_path}qa_notes.md`:
+  - File missing → empty string `""` (silent — pre-8.4 session or fresh /workflow run with no preceding /spec).
+  - **(s2) File exists but read fails** (permission, encoding, IO error) → warn user (in `user_lang`): "Failed to read `{docs_path}qa_notes.md`: <error>. Discovery Notes will be empty for planner injection." Then fall back to empty string `""` and proceed (do NOT abort the dispatch — empty Discovery Notes is harmless per the backward-compat note below).
+- `critic_findings` = read content of `{docs_path}critic_findings.md` using the same pattern (missing → empty silently; read failure → warn + empty fallback).
+
+When dispatching ANY planner template (`architect.md`, `senior_developer.md`, `qa_specialist.md`, `planner_single.md`), pass `{qa_discovery_notes}` and `{critic_findings}` as keyword variables (always — even when empty, to avoid `str.format()` KeyError on the new placeholders).
+
+**(m4) Scope of injection**: this injection applies ONLY to the initial proposal dispatch sub-agents — single mode dispatch (Step 2 single mode step 3) + standard/multi mode 2a "Independent Proposals" dispatches. Synthesis (standard 2b, multi 2c) and Cross-Critique (multi 2b) sub-agents do NOT receive `{qa_discovery_notes}` / `{critic_findings}` directly — they read proposal files which already incorporate this context (each proposal sub-agent at 2a-time received the Discovery Notes and embedded the relevant insights into its proposal output). Do NOT double-inject downstream; the synthesis/cross-critique templates do not declare these placeholders.
+
+Backward compat: pre-8.4 sessions where these files do not exist receive empty strings — templates render the `## Discovery Notes from Spec Phase` section with empty sub-bodies, which is harmless.
+
+**(M10) Common dispatch variable set (canonical — referenced by all 3 mode-specific dispatch steps):** every planner sub-agent receives the following template variables; mode-specific dispatch steps below say "Common dispatch variable set + <extras>" instead of re-enumerating, so a future variable addition only updates this canonical list:
+- `{task_description}` — from state.json
+- `{repo_path}` — from state.json (or `cwd` for greenfield)
+- `{lang}` — from state.json (project primary language detection)
+- `{scope}` — from state.json (file scope filter)
+- `{user_lang}` — from state.json
+- `{qa_discovery_notes}` — prepared above (always pass; empty string fallback)
+- `{critic_findings}` — prepared above (always pass; empty string fallback)
+- `{conventions}` — derived from `state.conventions` per `§Conventions injection rule` (always pass; empty string fallback)
+Mode-specific dispatch steps add `{output_path}` (architect/senior_developer/qa_specialist) or `{spec_path}` (planner_single only).
+
 #### Step 2 — single mode
 
 1. Update phase → `"planning"`.
 2. Read template: `{CLAUDE_PLUGIN_ROOT}/templates/planner/planner_single.md`
-3. **Dispatch 1 sub-agent** with prompt built from template variables: `{task_description}`, `{repo_path}`, `{lang}`, `{scope}`, `{user_lang}`, `{spec_path}` = `{docs_path}spec.md`.
-   - **Conventions injection:** If `conventions` in state.json starts with `"file:"`, extract the path after the prefix, read the file content, and pass as `{conventions}`. If `conventions` is `null`, `"skipped"`, or the referenced file does not exist, pass `{conventions}` as empty string.
+3. **Dispatch 1 sub-agent** with prompt built from the **Common dispatch variable set** (see §Step 2 Discovery Notes Injection above) plus mode-specific extra `{spec_path}` = `{docs_path}spec.md`.
    - Model: if preset ≠ "default", use `model_config.advisor`.
 4. Parse return → extract first line. Print: `  ✓ {first line}`
 5. Verify `spec.md` exists.
@@ -506,8 +573,7 @@ Print: `[harness] Phase: Plan`
 
 1. Update phase → `"planning"`.
 2. Read templates: `architect.md`, `senior_developer.md`
-3. **Dispatch 2 sub-agents in parallel.** Each gets: `{task_description}`, `{repo_path}`, `{lang}`, `{scope}`, `{user_lang}`, `{output_path}` = `.harness/planner/proposal_<persona>.md`.
-   - **Conventions injection:** If `conventions` starts with `"file:"`, read the file and pass as `{conventions}`. If `null`, `"skipped"`, or file missing, pass empty string.
+3. **Dispatch 2 sub-agents in parallel.** Each gets the **Common dispatch variable set** (see §Step 2 Discovery Notes Injection above) plus mode-specific extra `{output_path}` = `.harness/planner/proposal_<persona>.md`.
    - Model: if preset ≠ "default", use `model_config.advisor`.
 4. Parse returns. Print: `  ✓ 2 proposals generated`
 5. Verify both proposal files exist.
@@ -527,8 +593,7 @@ Print: `[harness] Phase: Plan`
 
 1. Update phase → `"planning"`.
 2. Read templates: `architect.md`, `senior_developer.md`, `qa_specialist.md`
-3. **Dispatch 3 sub-agents in parallel.** Each gets template vars + `{output_path}` = `.harness/planner/proposal_<persona>.md`.
-   - **Conventions injection:** If `conventions` starts with `"file:"`, read the file and pass as `{conventions}`. If `null`, `"skipped"`, or file missing, pass empty string.
+3. **Dispatch 3 sub-agents in parallel.** Each gets the **Common dispatch variable set** (see §Step 2 Discovery Notes Injection above) plus mode-specific extra `{output_path}` = `.harness/planner/proposal_<persona>.md`.
    - Model: if preset ≠ "default", use `model_config.advisor`.
 4. Parse returns. Print: `  ✓ 3 proposals generated`
 5. Verify all 3 proposal files exist.
@@ -954,7 +1019,19 @@ Ask via AskUserQuestion (in `user_lang`):
   - "No commit" / "Clean .harness/ only, keep changes in working tree"
 
 Actions (apply Safety Guard before each delete):
-- "Commit code only": delete `.harness/`, delete `{docs_path}`, stage + commit code
+- "Commit code only": (NEW in 8.4 — protect persisted spec artifacts) Apply this exact 5-step sequence:
+  1. **(M8) Safety Guard validation** on `{docs_path}` — apply the full Artifact Cleanup Safety Guard above (slug check + path depth + `Path.cwd()` containment) BEFORE any staging or deletion. If validation fails, **ABORT**: do NOT stage, do NOT delete. Surface the failed check to the user. Both `.harness/` and `{docs_path}` remain intact for manual recovery.
+  2. **Stage spec-persistence files** for commit (only if the source file exists — silently skip missing files):
+     - `{docs_path}qa_notes.md`
+     - `{docs_path}critic_findings.md`
+     - `{docs_path}conventions.md`
+     
+     **(s4) Per-file staging failure handling**: if `git add <file>` fails for a specific file (permission, .gitignore conflict, etc.), warn the user (in `user_lang`): "Failed to stage `<file>`: <error>. Spec artifact may not be in git history." Continue with remaining files — do NOT abort the whole sequence on a single staging failure. The code commit (step 5) is more critical than any individual artifact preservation.
+  3. **Delete `.harness/`** (the Safety Guard already validated the parent context).
+  4. **Delete `{docs_path}`** working-directory contents.
+  5. **Commit** code changes plus the staged spec artifacts.
+
+  **(m2) git index vs working directory note**: between step 2 (stage) and step 4 (delete working dir), the spec artifact files are staged in the git index but then removed from the working directory. This is correct behavior — `git add` captures a snapshot to the index at stage-time; a subsequent working-directory `rm` does NOT mark the staged files as deleted in the index (a working-tree-only delete after index-stage is a no-op for the index — it only changes the working tree, not the staged content). The final commit (step 5) therefore includes the 3 staged artifacts as additions even though they no longer exist on disk; they remain recoverable from git history.
 - "Commit all": delete `.harness/`, stage + commit `{docs_path}` + code
 - "No commit": delete `.harness/` only
 
@@ -1055,7 +1132,11 @@ validate_path(path, kind) where kind ∈ {output_dir, file_reference, diff_targe
   4. kind-specific:
      - output_dir:
          First segment (path.split("/")[0]) ∉ {memory, spec, planner, generator,
-         evaluator, verify, harness, .harness, docs}.
+         evaluator, verify, harness, .harness}.
+         Special case (NEW in 8.4): if first segment == "docs", second segment
+         MUST == "harness" (path startswith "docs/harness/"). Else halt:
+         "output-dir under docs/ must be docs/harness/..." (allows /spec handoff
+         path docs/harness/<slug>/ while still blocking other docs/* overrides.)
      - file_reference (failing_files_list):
          (a) relative path, (b) no .. segment, (c) inside repo_path,
          (d) outside .harness/, docs/harness/*, memory/.

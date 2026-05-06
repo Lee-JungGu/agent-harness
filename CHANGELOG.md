@@ -6,6 +6,29 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 Commit messages follow [Conventional Commits](https://www.conventionalcommits.org/).
 
+## [8.4.0] — 2026-05-06
+
+### Added
+
+- **/spec deep mode now dispatches 4 analysts in parallel**: Requirements + UserScenario + RiskAuditor (NEW) + TechConstraint (NEW). Risk and TechConstraint analysts catch security, concurrency, schema, and operational issues that previously surfaced only in /workflow review cycles (coin-washer Critical 5/7 reproducible at spec-time, target verified per Phase 7 smoke test).
+- **/spec Critic stage**: cold review of synthesized spec.md classifies findings as Critical/Major/Minor with `[C*]/[M*]/[m*]` IDs. Critical or Major findings trigger a 3-way gate (Auto-revise / Modify / Approve as-is). Auto-revise re-runs synthesis with `{critic_findings}` injection (max 1 round; 2nd round offers Approve/Stop only — no oscillation).
+- **/spec Convention Scan (Step 1.5)**: scans CLAUDE.md (has_git=true, mirrors workflow) and 7 candidate files (has_git=false: STYLE_GUIDE.md, CONTRIBUTING.md, conventions.md, guidelines.md, policy.md, docs/style-guide.md, docs/conventions.md, case-insensitive). New `--reference <path>` CLI flag overrides auto-detect.
+- **/spec Phase 3 persists `qa_notes.md`, `critic_findings.md`, `conventions.md`** to `{docs_path}` before cleanup. /workflow Step 1.5 auto-reuses persisted conventions; Step 2 injects `{qa_discovery_notes}` + `{critic_findings}` into all 4 planner templates (architect, senior_developer, qa_specialist, planner_single). /workflow Step 8 "Commit code only" preserves the 3 artifacts in the commit.
+- **/ship Stage 6.5 (`merge_to_base`)**: merges release branch into base branch BEFORE tag push (closes develop→main lag from 8.1.0/8.2.0/8.3.0). Branch protection detection with PR-creation fallback (Path A) vs standard merge (Path B). Substep-level recovery via 3 new substep enum values. Push-rejection handling: 3-way protected-base gate on Path A entry (Create PR / Skip / Stop), and 5-way push-rejection gate on Path B step 7 (Retry / Manual / Create PR / Skip / Stop) with persistent retry-count cap. HARD-GATEs at merge and push, with branch-protected rollback documentation.
+
+### Changed
+
+- **/spec Phase 3 invokes `/workflow`** with explicit `--output-dir docs/harness/<slug>/ "Implement based on {docs_path}spec.md"` (was: `/workflow "Implement based on docs/harness/<slug>/spec.md"`). The `--output-dir` is required to ensure /workflow's `docs_path` matches /spec's `docs_path` — without it, /workflow re-slugifies the task string and silently picks a different directory.
+- **`templates/spec/synthesis.md`** now accepts 5 input variables (was 2): `{requirements_analysis}`, `{scenario_analysis}`, `{risk_analysis}`, `{tech_constraint_analysis}`, `{critic_findings}`. Synthesis Instructions updated from "two analyses" to "four analyses (and Critic findings if revising)".
+- **All 4 planner templates** (architect.md, senior_developer.md, qa_specialist.md, planner_single.md) now include `## Discovery Notes from Spec Phase` section with `{qa_discovery_notes}` + `{critic_findings}` placeholders.
+- **/spec state.json schema** adds 3 fields: `cli_flags.reference`, `conventions`, `critic`. Pre-8.4 sessions resume with these fields defaulted to `null` via `state.get(field, default)` pattern. **Important**: /spec's backward-compat policy intentionally diverges from /workflow's soft-default — /spec halts at Phase 2a-D step 3 if `state.conventions` is null on resume, forcing user Restart or manual fix (silent degradation would produce lower-quality specs without user awareness).
+
+### Breaking
+
+- **Persona count change in /spec deep mode** (2 → 4 + Critic). Token cost increases approx 1.9x for deep runs (estimated; measured value TBD per Phase 7 smoke test — ROADMAP entry will be updated with the actual multiplier after smoke test). The legacy 2-analyst behavior is no longer accessible in 8.4 (no `--legacy-deep` flag — defer to 8.5 if user feedback warrants).
+- **/spec → /workflow handoff CLI contract changed**. Users of automation scripts that wrap /spec output strings should update to expect `--output-dir docs/harness/<slug>/` in the invocation. The task description string also changed from `"Implement based on docs/harness/<slug>/spec.md"` (absolute-looking) to `"Implement based on {docs_path}spec.md"` (placeholder form documenting the assembly contract).
+- **Planner templates**: forked custom planner templates that omit the new `{qa_discovery_notes}` / `{critic_findings}` placeholders will silently render an empty Discovery Notes section. Recommended: update fork to include the placeholders (see `templates/planner/architect.md` for reference).
+
 ## [8.3.0] — 2026-04-30
 
 ### Added

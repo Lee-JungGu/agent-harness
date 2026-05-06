@@ -6,7 +6,7 @@ No dependencies required. No Python, no pip, no build steps — just install the
 
 Inspired by Anthropic's [Harness Design for Long-Running Application Development](https://www.anthropic.com/engineering/harness-design-long-running-apps).
 
-> Demo GIF coming soon — see [ROADMAP.md](ROADMAP.md#v83--planned).
+> Demo GIF coming soon — see [ROADMAP.md](ROADMAP.md) for the v8.5+ planned items.
 
 ## At a Glance
 
@@ -77,7 +77,7 @@ Higher modes cost more per run but save total cost by reducing retry rounds. Sta
 | **Code Review** | `/code-review <target>` | Systematic, bias-free code review. Quick (1 agent), deep (2 specialists), or thorough (3 specialists + cross-verification). |
 | **MD Optimize** | `/md-optimize` | Optimize CLAUDE.md and project `.md` files for token efficiency. |
 | **MD Generate** | `/md-generate` | Analyze project and generate/enhance CLAUDE.md for effective Claude Code development. |
-| **Ship** | `/ship` | Q&A release pipeline: version bump, CHANGELOG (Conventional Commits), build/test verify, git ops (commit/tag/push), GitHub release — HARD-GATE before every irreversible action. Auto-detects environment, skips unavailable stages. |
+| **Ship** | `/ship` | Q&A release pipeline: version bump, CHANGELOG (Conventional Commits), build/test verify, git ops (commit/tag/`merge_to_base`/push), GitHub release — HARD-GATE before every irreversible action. Auto-detects environment, skips unavailable stages. Stage 6.5 (`merge_to_base`, v8.4+) merges release branch into base branch BEFORE tag push so the tag is reachable from the base branch. |
 
 ## Install
 
@@ -1046,7 +1046,8 @@ A Q&A-driven release pipeline orchestrator. Guides version bump, changelog gener
 | 3 | **changelog** | Parses git log → Conventional Commits categorization → drafts entry → prepends to `CHANGELOG.md` | Edit gate before write |
 | 4 | **build_verify** | Runs auto-detected build/test commands; writes `docs/harness/ship-<slug>/changes.md` | None (read-only verify) |
 | 5 | **code_review** | Optional summary review of staged changes (delegates to `/code-review`) | (delegates) |
-| 6 | **git_ops** | Commits via `-F` (no shell injection), creates annotated tag, splits branch/tag push | Commit + branch-push + tag-push gates |
+| 6 | **git_ops** | Commits via `-F` (no shell injection), creates annotated tag, splits branch push (6c-i), runs Stage 6.5 (merge_to_base), then tag push (6c-ii) | Commit + branch-push gates |
+| 6.5 | **merge_to_base** (v8.4+) | Merges release branch → base branch BEFORE tag push so the tag is reachable from base branch. Two execution paths: Path A (protected base → `gh pr create` fallback, 3-way gate) / Path B (standard merge — FF / Non-FF resolution / rebase-then-ff with force-push). Substep-level recovery via `merge_base_pending` / `merge_base_done` / `merge_base_pushed`. Persistent `push_retry_count` (state.json) caps retry loops across Stop/Resume cycles. | Pre-merge HARD-GATE + post-merge / pre-push HARD-GATE + 5-way push-rejection gate (Retry / Manual / Create PR / Skip / Stop) |
 | 7 | **gh_release** | Extracts `CHANGELOG.md`'s `## [{version}]` section → `gh release create --notes-file` | Release-create gate |
 
 ### Auto-Detection
@@ -1065,16 +1066,23 @@ A Q&A-driven release pipeline orchestrator. Guides version bump, changelog gener
 - **Branch name regex**: `^[a-zA-Z0-9/_.-]+$`
 - **`-F` patterns** for commit/tag messages — no shell injection via release notes or commit text.
 - **`.harness/` cleanup Safety Guard** (v8.2.0): skill identity check + resolved-parent depth check + unconditional `Path.resolve() ⊆ Path.cwd()` symlink-escape check + display-before-delete + symlink-aware deletion (`is_symlink()` short-circuit / `follow_symlinks=False`).
+- **Stage 6.5 rollback safety** (v8.4.0): `pre_merge_sha` (the base_branch tip BEFORE the merge) is captured by `git rev-parse --verify refs/heads/{base_branch}^{commit}` — exit-code + 40-char hex validated — and persisted to `state.stage_results.merge_to_base.pre_merge_sha` BEFORE the pre-merge HARD-GATE displays it; the rollback command is the explicit chain `git checkout {base_branch} && git reset --hard {pre_merge_sha} && git checkout {release_branch}` (never bare `reset --hard` since HEAD location varies between Path A and Path B).
+- **Stage 6.5 rebase-then-ff force-push safety** (v8.4.0): when the user picks rebase-then-ff, the rewritten release_branch is force-pushed via `git push --force-with-lease origin {release_branch}` (refuses to overwrite if the remote was updated externally between 6c-i and Stage 6.5) so the tag created at 6c-ii points to a commit that exists on the remote.
+- **Stage 6.5 base_branch URL-injection guard** (v8.4.0): `base_branch` is re-validated against `^[a-zA-Z0-9/_.-]+$` before the `gh api repos/:owner/:repo/branches/{base_branch}/protection` call so user-supplied free-text values cannot traverse or rewrite the API request URL.
 
 ### Session Recovery
 
-State is checkpointed at every substep (`version_bump_pass1_done`, `git_branch_pushed`, `git_push_done`, etc.). Resuming `/ship` after interruption picks up at the exact substep, re-checks already-pushed branches/tags via `git ls-remote`, and skips completed operations.
+State is checkpointed at every substep (`version_bump_pass1_done`, `git_branch_pushed`, `merge_base_pending` / `merge_base_done` / `merge_base_pushed` (v8.4+), `git_push_done`, etc.). Resuming `/ship` after interruption picks up at the exact substep, re-checks already-pushed branches/tags via `git ls-remote`, and skips completed operations. v8.4.0 also adds `current_stage` ↔ `substep` consistency validation on resume to surface corrupted/hand-edited state.json instead of auto-recovering.
 
 ### File Structure
 
 ```
 .harness/
 ├── state.json               # current_stage, substep, stages_selected, release_version, tag_name
+│                            # state.stage_results.merge_to_base (v8.4+):
+│                            #   pre_merge_sha     — captured base_branch tip (Path B; null on Path A)
+│                            #   path_a_pr_url     — gh pr create result (Path A; or Path B step 7 Create PR)
+│                            #   push_retry_count  — persistent counter for the 5-way push-rejection gate
 ├── changelog_draft.md       # Conventional Commits classification (Step 3)
 ├── release_notes.md         # extracted CHANGELOG section (Step 7)
 ├── commit_msg.txt           # commit message (Step 6, -F input)
@@ -1096,10 +1104,11 @@ Communicates in the user's language for progress, questions, confirmations, erro
 
 See [ROADMAP.md](ROADMAP.md) for the full roadmap with rationale.
 
+- **v8.4** (Shipped): `/spec` deep-mode 4-analyst pipeline (Requirements + UserScenario + RiskAuditor + TechConstraint) with cold Critic stage and 3-way revise gate; `/spec` Convention Scan (Step 1.5) with `--reference` flag; `/spec` Phase 3 persists `qa_notes.md`/`critic_findings.md`/`conventions.md` with `/workflow` Step 1.5/Step 2 reuse; `/ship` Stage 6.5 (`merge_to_base`) closes develop→main lag — Path A (protected base, PR fallback) vs Path B (local merge with FF / Non-FF / rebase-then-ff + force-with-lease), substep-level recovery, persistent retry-count cap, branch-protected rollback documentation
 - **v8.3** (Shipped): `/ship` version_bump auto-detection for `.claude-plugin/plugin.json` (`$.version`) and `.claude-plugin/marketplace.json` (`$.metadata.version` + `$.plugins[*].version`) — JSON-aware Pass 2 preserves CRLF/LF, BOM, trailing-newline, and avoids the naive-string-replace regression on coincidentally-equal version strings in other fields
 - **v8.2** (Shipped): `/ship` Safety Guard parity with `/workflow` (unconditional symlink-escape check, display-before-delete, symlink-aware deletion), strict 254-char tag-name regex hard cap
 - **v8.1** (Shipped): Path Validator single source, Auto-fix State Transition Table (invariants I1–I4), `--verifier-model` flexibility, `--output-dir` flag, Auto-fix proposal for Layer 1 failures (both `/workflow` and `/refactor`), `.github/` contribution templates
-- **v8.3+**: Custom persona override (`templates/user-override/`), external CLI wrapper
+- **v8.5+** (Planned): Custom persona override (`templates/user-override/`), external CLI wrapper, demo GIF
 
 ---
 
