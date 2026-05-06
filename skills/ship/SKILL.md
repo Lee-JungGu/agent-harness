@@ -148,10 +148,10 @@ Stage resume map (with substep details):
   - `substep == null` or `"git_commit_pending"` → Step 6a (Commit)
   - `substep == "git_commit_done"` or `"git_tag_pending"` → Step 6b (Tag)
   - `substep == "git_tag_done"` or `"git_push_pending"` → Step 6c (Push — branch first)
-  - `substep == "git_branch_pushed"` → Stage 6.5 entry (merge_to_base — Skip conditions checked first)
-  - `substep == "merge_base_pending"` → Stage 6.5 step 1 (pre-merge HARD-GATE)
+  - `substep == "git_branch_pushed"` → Stage 6.5 entry (merge_to_base — Skip conditions checked first; Recovery check at Step 6c top routes to Stage 6.5 entry, NOT directly to tag push, when this substep is observed)
+  - `substep == "merge_base_pending"` → Stage 6.5 step 2 (pre-merge HARD-GATE — `pre_merge_sha` is already captured in state.json by step 1 prior to setting this substep)
   - `substep == "merge_base_done"` → Stage 6.5 step 5 (post-merge / pre-push HARD-GATE)
-  - `substep == "merge_base_pushed"` → Step 6c-ii (tag push)
+  - `substep == "merge_base_pushed"` → Step 6c-ii (tag push) — covers all of: Path B push success, Path A PR creation, Skip (entry-level OR HARD-GATE-level OR push-rejection-level); see substep enum note
   - `substep == "git_push_done"` → next stage
 - `gh_release` → Step 7
 - `completed` → no active session, proceed to Step 1
@@ -673,10 +673,21 @@ options:                      (translate description to user_lang; keep label En
 
 **B. Standard merge path** (no detected protection or status unknown):
 
-1. **substep → `merge_base_pending`**. **HARD-GATE (CM9)** via AskUserQuestion:
+1. **Capture pre_merge_sha FIRST (before HARD-GATE display)** (B6 — required so the HARD-GATE rollback message can interpolate the actual SHA, not an unresolved placeholder). **Capture the `base_branch` HEAD sha regardless of which branch is currently checked out:**
+   ```bash
+   pre_merge_sha=$(git rev-parse --verify refs/heads/{base_branch}^{{commit}})
+   ```
+   - Use `refs/heads/{base_branch}` to disambiguate against tags or remote-tracking refs of the same name.
+   - The `^{{commit}}` peel ensures a commit object is resolved (not a tag-to-commit indirection).
+   - **Verify both the exit code (must be 0) and the output (must be a 40-char hex)** before proceeding. On failure (e.g., `base_branch` does not exist locally) → halt with error and instruct user to fetch the branch (`git fetch origin {base_branch}:{base_branch}`) and re-invoke /ship.
+   - This MUST resolve to the base_branch's tip — if it resolved to the release_branch HEAD instead (e.g., naive `git rev-parse HEAD` while still on release_branch), the rollback `git reset --hard {pre_merge_sha}` on base_branch would JUMP base_branch FORWARD to the release HEAD instead of reverting it, which is the opposite of recovery.
+
+   Store in state.json: `state.stage_results.merge_to_base.pre_merge_sha = "{pre_merge_sha}"`. Then set `substep → "merge_base_pending"`.
+
+2. **HARD-GATE (CM9)** via AskUserQuestion:
    ```
    header: "Merge to Base"     (translate to user_lang)
-   question: "About to merge `{release_branch}` → `{base_branch}` (local merge — irreversible without `git reset --hard {pre_merge_sha}` on `{base_branch}` to undo). Proceed?"
+   question: "About to merge `{release_branch}` → `{base_branch}` (local merge — irreversible without `git reset --hard {pre_merge_sha}` on `{base_branch}` to undo, where `{pre_merge_sha}` is the captured base_branch tip from step 1). Proceed?"
                                 (translate to user_lang)
    options:                     (translate description to user_lang; keep label English)
      - "Proceed" / "Run git merge"
@@ -685,14 +696,6 @@ options:                      (translate description to user_lang; keep label En
    ```
    - Skip → `substep → "merge_base_pushed"` + warn `[ship] ⚠ base_branch ({base_branch}) will not contain release commits — tag will not be reachable from {base_branch}.` Continue to 6c-ii tag push.
    - Stop → halt session.
-
-2. **Capture pre_merge_sha** (B6 — for rollback message). **Capture the `base_branch` HEAD sha BEFORE checkout, regardless of which branch is currently checked out:**
-   ```bash
-   pre_merge_sha=$(git rev-parse {base_branch})
-   ```
-   This MUST resolve to the base_branch's tip — if it resolved to the release_branch HEAD instead (i.e., used `git rev-parse HEAD` while still on release_branch), the rollback `git reset --hard {pre_merge_sha}` on base_branch would JUMP base_branch FORWARD to the release HEAD instead of reverting it, which is the opposite of recovery. Verify the resolution succeeded (non-empty 40-char hex) before proceeding.
-
-   Store in state.json: `state.stage_results.merge_to_base.pre_merge_sha = "{pre_merge_sha}"`.
 
 3. **Switch to base_branch and attempt FF merge:**
    ```bash
@@ -714,16 +717,21 @@ options:                      (translate description to user_lang; keep label En
      - "Stop" / "Halt for manual intervention"
    ```
    - **no-ff merge** → `git merge --no-ff {release_branch} -m "Merge release {release_version}"`. On conflict → halt with error message + recovery instructions ("`git merge --abort` then re-invoke /ship from Stage 6.5"). On success → proceed to step 5.
-   - **rebase-then-ff** → AskUserQuestion sub-gate:
+   - **rebase-then-ff** → AskUserQuestion sub-gate. **Note on current branch state**: at the moment this sub-gate is displayed, no git command has yet been executed for the rebase-then-ff path, so HEAD is still on `{base_branch}` (from step 3's checkout). Cancel preserves that state; Yes proceeds to the rebase pipeline below.
      ```
      header: "Confirm Rebase"   (translate to user_lang)
-     question: "Rebase rewrites {release_branch} history. If {release_branch} was already pushed, force-push will be required after Stage 6.5. Continue?"
+     question: "Rebase rewrites `{release_branch}` history. Because step 6c-i already pushed `{release_branch}` to origin (substep == git_branch_pushed at Stage 6.5 entry), a force-push of `{release_branch}` is required after the rebase to keep the remote in sync — otherwise the tag created at 6c-ii would point to a local-only rebase commit that does not exist on the remote. Continue?"
                                 (translate to user_lang)
      options:                   (translate description to user_lang; keep label English)
-       - "Yes" / "Run rebase then FF merge"
+       - "Yes" / "Run rebase, FF merge, then force-push release_branch"
        - "Cancel" / "Return to merge strategy selection"
      ```
-     On Yes: `git checkout {release_branch} && git rebase {base_branch} && git checkout {base_branch} && git merge --ff-only {release_branch}`. On Cancel → return to step 4 options. On rebase conflict → halt.
+     On Cancel → return to step 4 options (HEAD remains on `{base_branch}` from step 3's checkout — no cleanup needed). On Yes, execute the rebase pipeline as separate commands so the agent can identify which step failed and recover precisely:
+     1. `git checkout {release_branch}` — switch to release branch for rebase. On failure → halt with error (HEAD still on `{base_branch}`).
+     2. `git rebase {base_branch}` — rebase release_branch onto base_branch. On rebase conflict → execute `git rebase --abort` + `git checkout {release_branch}` (to ensure HEAD is on release_branch; `--abort` typically restores it but verify) + halt with recovery instructions: "Rebase aborted. Resolve conflicts manually on `{release_branch}` against `{base_branch}`, then re-invoke /ship from Stage 6.5 (substep == `merge_base_pending`)." `substep` retains `merge_base_pending` for resume.
+     3. `git checkout {base_branch}` — switch back to base_branch for FF merge. On failure → halt with error and instruct user to manually `git checkout {base_branch}`.
+     4. `git merge --ff-only {release_branch}` — should now succeed since release_branch was rebased onto base_branch. On failure (extremely unusual after a clean rebase) → halt with error.
+     5. **Force-push release_branch to remote (REQUIRED — closes C3 tag-integrity gap)**: `git push --force-with-lease origin {release_branch}`. The `--force-with-lease` variant refuses to overwrite the remote if it has been updated by another party since the last fetch — safer than plain `--force`. On rejection (lease check failed → another commit was pushed to remote since 6c-i) → halt with error: "Remote `{release_branch}` was updated externally between 6c-i and Stage 6.5. Investigate the foreign commit (`git fetch origin {release_branch} && git log {release_branch}..origin/{release_branch}`), reconcile manually, then re-invoke /ship from Stage 6.5." On other failure → halt. On success → proceed to step 5.
    - **Skip Stage 6.5** → `git checkout {release_branch}` (return to release branch) + same skip-warn as step 1, `substep → "merge_base_pushed"`, continue to 6c-ii.
    - **Stop** → `git checkout {release_branch}` + halt.
 
@@ -759,7 +767,7 @@ options:                      (translate description to user_lang; keep label En
      - **Retry** → re-run step 6. Track a `retry_count` (initialized to 0 on first gate display, incremented on each Retry click). When `retry_count >= 2`, on the next gate display **disable the Retry option** (omit it from `options`) and the user must choose Manual / Create PR / Skip / Stop. Rationale: 2 transient failures in a row strongly signal a non-transient cause (auth, protection, etc.); forcing a different choice prevents infinite retry loops.
      - **Manual** → `substep → "merge_base_pushed"`, `git checkout {release_branch}`, continue to 6c-ii.
      - **Create PR** → execute `gh pr create --base {base_branch} --head {release_branch} --title "Release {release_version}"`. On success → `substep → "merge_base_pushed"`, `git checkout {release_branch}`, continue to 6c-ii. On failure → return to gate.
-     - **Skip Stage 6.5** → execute `git reset --hard {pre_merge_sha}` on `{base_branch}` (rollback the local merge — `pre_merge_sha` refers to `{base_branch}`'s pre-merge tip per step 2's capture, NOT the release_branch HEAD), `git checkout {release_branch}`, `substep → "merge_base_pushed"`, warn user, continue to 6c-ii.
+     - **Skip Stage 6.5** → rollback the local merge by executing the explicit chain `git checkout {base_branch} && git reset --hard {pre_merge_sha} && git checkout {release_branch}` (do NOT issue `git reset --hard` without an explicit `git checkout {base_branch}` prepend — without it, if HEAD is currently on release_branch the reset would destroy release commits by jumping release_branch backwards to the base_branch pre-merge tip; `pre_merge_sha` refers to `{base_branch}`'s pre-merge tip per step 1's capture, NOT the release_branch HEAD). On any step failure (checkout to base_branch, reset, or checkout back to release_branch) → halt with error and leave `substep == "merge_base_done"` so user can resume from step 5 HARD-GATE. On success → `substep → "merge_base_pushed"`, warn user, continue to 6c-ii.
      - **Stop** → halt session (state.json preserved — `substep == "merge_base_done"` enables resume from step 5 HARD-GATE).
 
 **Rollback documentation** (always shown in Stage 6.5 prompts that involve merge):
