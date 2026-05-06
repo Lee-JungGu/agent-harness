@@ -586,10 +586,10 @@ Update state.json: `substep → "git_push_pending"`.
 <HARD-GATE>
 Ask via AskUserQuestion (in `user_lang`):
 - header: "Git Push"
-- question: "IRREVERSIBLE: This will push branch `{branch}` and tag `{tag_name}` to remote `{remote}`. Cannot be undone without force-push."
+- question: "IRREVERSIBLE: This will push branch `{branch}` to remote `{remote}`, then run Stage 6.5 (merge_to_base — merges `{branch}` into `{base_branch}` and pushes `{base_branch}` UNLESS Stage 6.5 skip conditions match: `{branch} == {base_branch}` OR `{base_branch}` is null), then push tag `{tag_name}`. Branch and tag operations cannot be undone without force-push; Stage 6.5 has its own per-step gates and a documented rollback (`git reset --hard <pre_merge_sha>` on `{base_branch}`)."
 - options:
-  - "Push" / "Push branch and tag to remote"
-  - "Skip push" / "Skip pushing to remote"
+  - "Push" / "Push branch, run Stage 6.5, push tag"
+  - "Skip push" / "Skip all push operations (branch, base_branch, tag)"
   - "Stop" / "Halt pipeline"
 Only "Push" advances.
 </HARD-GATE>
@@ -779,17 +779,23 @@ options:                      (translate description to user_lang; keep label En
        - "Skip Stage 6.5" / "Reset local merge, base_branch lags release"
        - "Stop" / "Halt for manual intervention"
      ```
-     - **Retry** → re-run step 6. Track a `retry_count` (initialized to 0 on first gate display, incremented on each Retry click). When `retry_count >= 2`, on the next gate display **disable the Retry option** (omit it from `options`) and the user must choose Manual / Create PR / Skip / Stop. Rationale: 2 transient failures in a row strongly signal a non-transient cause (auth, protection, etc.); forcing a different choice prevents infinite retry loops.
+     - **Retry** → re-run step 6. Track a `retry_count` **persisted in state.json at `state.stage_results.merge_to_base.push_retry_count`** (closes M4 / DX #8 / Sec N1 — without persistence, a Stop-then-resume would reset the counter to 0 and bypass the cap, allowing unbounded retries across sessions). The counter is initialized to 0 the first time this gate is displayed for the current Stage 6.5 attempt, read from state.json on every gate display (so resumed sessions see the cumulative count), and incremented and re-persisted on every Retry click before re-running step 6. When `push_retry_count >= 2`, on the next gate display **disable the Retry option** (omit it from `options`) and the user must choose Manual / Create PR / Skip / Stop. Rationale: 2 transient failures in a row strongly signal a non-transient cause (auth, protection, etc.); forcing a different choice prevents infinite retry loops, and persistence ensures the cap survives Stop/Resume cycles. Reset to 0 only when Stage 6.5 transitions to `merge_base_pushed` (i.e., this attempt is done) or when the user explicitly Restarts /ship from Stage 1.
      - **Manual** → `substep → "merge_base_pushed"`, `git checkout {release_branch}`, continue to 6c-ii.
      - **Create PR** → execute `gh pr create --base {base_branch} --head {release_branch} --title "Release {release_version}"`. On success → `substep → "merge_base_pushed"`, `git checkout {release_branch}`, continue to 6c-ii. On failure → return to gate.
      - **Skip Stage 6.5** → rollback the local merge by executing the explicit chain `git checkout {base_branch} && git reset --hard {pre_merge_sha} && git checkout {release_branch}` (do NOT issue `git reset --hard` without an explicit `git checkout {base_branch}` prepend — without it, if HEAD is currently on release_branch the reset would destroy release commits by jumping release_branch backwards to the base_branch pre-merge tip; `pre_merge_sha` refers to `{base_branch}`'s pre-merge tip per step 1's capture, NOT the release_branch HEAD). On any step failure (checkout to base_branch, reset, or checkout back to release_branch) → halt with error and leave `substep == "merge_base_done"` so user can resume from step 5 HARD-GATE. On success → `substep → "merge_base_pushed"`, warn user, continue to 6c-ii.
      - **Stop** → halt session (state.json preserved — `substep == "merge_base_done"` enables resume from step 5 HARD-GATE).
 
-**Rollback documentation** (always shown in Stage 6.5 prompts that involve merge):
+**Rollback documentation** — appended verbatim (after the `options:` block) to the following gates ONLY, and ONLY when `state.stage_results.merge_to_base.pre_merge_sha` is non-null in state.json (Path A stores `null` and has no local-merge state to roll back, so this block is suppressed there):
+
+1. Path B step 2 HARD-GATE (Merge to Base)
+2. Path B step 5 HARD-GATE (Push Base)
+3. Path B step 7 Push Rejected gate
+
+For all other gates (Path A protected-base gate, sub-gates, entry-level Skip warnings) the block is NOT shown.
 
 > "If you reject the post-merge push or want to undo Stage 6.5 entirely, run:
 > `git checkout {base_branch} && git reset --hard {pre_merge_sha}`
-> on `{base_branch}` to revert to pre-merge state. The `pre_merge_sha` is stored in `state.json` at `stage_results.merge_to_base.pre_merge_sha` and refers to the base_branch tip BEFORE the merge."
+> on `{base_branch}` to revert to pre-merge state. The `{pre_merge_sha}` value is the actual SHA captured in step 1 and stored in `state.json` at `stage_results.merge_to_base.pre_merge_sha`; it refers to the base_branch tip BEFORE the merge. After the reset, run `git checkout {release_branch}` to return to the release branch."
 
 After Stage 6.5 completes (success path or skip path) — `substep == "merge_base_pushed"` and HEAD on `{release_branch}` — proceed to 6c-ii tag push. **6c-ii processes both entry routes identically**: (i) sessions that ran 6c-i and traversed Stage 6.5 (this section), (ii) legacy/skip sessions that reached 6c-ii directly via the entry-level Skip conditions. In both cases 6c-ii executes `git push origin {tag_name}` against the release_branch lineage and on success transitions `substep → "git_push_done"` (closes m9 / Arch N3).
 
