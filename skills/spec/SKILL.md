@@ -192,6 +192,11 @@ When the user provides a task description (via $ARGUMENTS or in conversation), e
      ```
      `state.critic.applied = "approved"` is the single-source-of-truth signal that Phase 2b-D step 6 reads to bypass Critic. `failure_reason` is observational (consumed by HARD-GATE display), not a control signal.
 
+   **(NEW in 8.4) Atomicity Contract — state.json single-write rule:**
+   - Every state.json update MUST be a single read-modify-write operation. When a logical transition needs to change multiple fields together (e.g. `phase` + `critic.applied`, or `phase` + `qa_round`), implementations MUST merge all field changes into one in-memory dict and emit ONE Write tool call covering the entire updated state.
+   - Sequential `Set X. Set Y.` prose in this skill is shorthand for "X and Y are part of the same atomic update," NOT a directive to perform two separate writes. Phase 2c-D step 6 ("Approve as-is" → `critic.applied = "approved"` + `phase = "critic_complete"`), Phase 2c-D step 4 ("dispatch failed" → `failure_reason` + `applied` + `phase`), Phase 2d-D step 2 (`critic.round` increment), Phase 2d-D step 3 (`phase` + `critic.applied`), and Phase 2d-D step 4 ("Approve" / "Stop") MUST all be single-write atomic updates.
+   - The `(m5)` Reachability note above describes a **legacy** non-atomic-write race that the Session Recovery `critic_active`-branch handles. Under the single-write contract, this race cannot occur in any new code path — Recovery branches that handle the legacy case (`critic_active` + `applied="approved"`) remain in place for backward compatibility with pre-fix sessions, but new transitions added in 8.4+ MUST follow the atomic-write rule and do not require their own dedicated mid-write Recovery branches.
+
 8. **Print setup summary** (in `user_lang`):
    ```
    [harness] Spec started!
@@ -245,7 +250,7 @@ This step runs after Setup and before Phase 1 Q&A. It populates `state.conventio
 
 ### Phase 1 — Requirements Discovery (Multi-round Q&A)
 
-Update state.json: `phase` → `"qa_active"`, `qa_round` → 1.
+**State init (idempotent — Session Recovery safe):** `phase` is already set to `"qa_active"` by Step 1.5 exit (see "Update phase" block above) — do NOT re-set here, the duplicate write was a 2026-05-06 review fix. For `qa_round`: set to `1` ONLY on fresh entry (i.e., when `qa_round` is missing/null in state.json). On Session Recovery resume into `qa_active`, `qa_round` MUST be preserved at its current value so multi-round Q&A progress (Round 2 or Round 3) is not lost. Pseudocode: `if state.qa_round is None: state.qa_round = 1`.
 
 #### Round 1: Initial Questions
 
