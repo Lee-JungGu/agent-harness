@@ -5,7 +5,7 @@
 **v8.4.0** — Spec Skill Hardening + /ship merge-to-base
 
 - **A+B+C+D — /spec Hardening**: Risk Auditor + Tech Constraint Analyst added to deep mode (4-analyst parallel synthesis), Spec Critic stage with 3-way gate + 1-round auto-revise, Convention Scan with `--reference` flag and has_git=false candidate file detection, qa_notes / critic_findings / conventions persistence to `{docs_path}` for slug-safe /spec → /workflow handoff (workflow Step 1.5 reuse, Step 2 variable injection into 4 planner templates, Step 8 cleanup protection).
-  Token cost (deep mode): measured at <TBD-after-implementation>x of base (estimated ~1.9x pre-implementation).
+  Token cost (deep mode): ~1.9x of base (analytic estimate from dispatch count: 5 calls deep vs 3 calls pre-8.4 + per-call content growth; live measurement deferred to follow-up smoke session). Spec-time detection rate (coin-washer reproduce, analytic mapping of 4-analyst + Critic against original review_report.md): **Critical 5/7** (high-confidence catches C1+C2+C4+C5+C6; borderline C3+C7), **Major 6/12** (high-confidence M1+M2+M3+M4+M5+M14). False-positive on 2 known-good specs (`feature-coin-washer-improvements`, `qaas-411-reopen-fix` — analytic prediction): **Critical=0, Major≤1** each.
   See: `skills/spec/SKILL.md`, `templates/spec/{risk_auditor,tech_constraint_analyst,critic,synthesis}.md`, `templates/planner/*.md`
 - **N2 — /ship Stage 6.5 merge_to_base**: Adds `develop → main` merge step before tag push (separate PR `harness/ship-merge-to-base` — added in companion plan if not yet merged). See `skills/ship/SKILL.md`.
 
