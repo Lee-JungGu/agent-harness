@@ -9,7 +9,7 @@
   See: `skills/spec/SKILL.md`, `templates/spec/{risk_auditor,tech_constraint_analyst,critic,synthesis}.md`, `templates/planner/*.md`
 - **N2 — /ship Stage 6.5 merge_to_base**: Adds `develop → main` merge step before tag push (separate PR `harness/ship-merge-to-base` — added in companion plan if not yet merged). See `skills/ship/SKILL.md`.
 
-**Breaking changes**: deep mode persona count 2 → 4 + Critic; /spec Phase 3 handoff CLI contract gains `--output-dir`; planner templates gain `{qa_discovery_notes}` / `{critic_findings}` placeholders (forked custom templates may render empty Discovery Notes silently).
+**Breaking changes**: deep mode persona count 2 → 4 + Critic; /spec Phase 3 handoff CLI contract gains `--output-dir`; planner templates gain `{qa_discovery_notes}` / `{critic_findings}` placeholders (forked custom templates may render empty Discovery Notes silently); `/spec` deep mode now hard-error halts at Phase 2a-D step 3 if `state.conventions` is null on resume — pre-8.4 sessions that reach `qa_complete`/`gen_ready`/`qa_active` MUST complete Step 1.5 (Convention Scan) before Phase 2 entry, either by Restart or via the M14 backward-compat Resume description override which routes through Step 1.5 first; intentional asymmetry vs `/workflow`'s silent-default missing-field policy (rationale: 4-analyst pipeline depends on convention context for high-quality output, so silent degradation through 8.4 flow would produce lower-quality specs).
 
 ---
 
