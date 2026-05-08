@@ -18,10 +18,12 @@ You are a **state-machine orchestrator**. Your role is:
 When a sub-agent returns:
 1. Read only the **first line** (up to first newline) for state decisions
 2. Extract keywords: `"FAIL"`, `"PASS"`, `"generated"`, `"changed"`, `"written"`
-3. Use the first line as the progress message shown to the user
+3. Use the first line as the progress message — translate the non-keyword portion to `user_lang` per §Output Language Contract — 1-line Return Translation. Glossary keywords (`PASS`/`FAIL`/`Verdict`/`[harness]`/etc.) MUST remain English raw.
 4. **Ignore all remaining text** — do not analyze, reference, or include it in subsequent prompts
 
 **1-line return parse failure**: If the return value does not match the expected format (`<keyword> — <summary>`), treat as `confidence: Unknown` and print `[harness] ⚠ 1-line return parse failed — fallback: confidence Unknown`. For Auto-fix Proposer specifically, the expected fallback format is: `auto_fix_patch written — confidence: Unknown — <reason>`.
+
+<!-- SYNC-WITH: §Output Language Contract — 1-line Return Translation -->
 
 ## Version & Compatibility
 
@@ -71,9 +73,51 @@ Detect the user's language from their **most recent message**. Store as `user_la
 
 **Re-detection:** On every user message, check if language changed. If so, update `user_lang`.
 
+## Output Language Contract
+
+> ⚠ Maintainers: any new `Print:` directive or user-facing output block added below MUST conform to this contract. CI lint enforcement is a TODO (not yet implemented).
+> This contract applies to **v2 sessions only**. v1 sessions are unaffected.
+
+### Invariant
+
+All orchestrator output visible to the user MUST be rendered in `user_lang`. Backtick-inline English inside `Print:` directives is a *template format*, not an output language declaration. When `user_lang == "en"`, this contract is a natural no-op (English → English is identity).
+
+### Preserved-English Glossary
+
+The following tokens MUST remain English raw in all output. Translation is forbidden.
+
+| Category | Tokens |
+|---|---|
+| Status keywords | `PASS`, `FAIL`, `FAIL L2`, `FAIL L3`, `Verdict`, `Verdict: PASS`, `Verdict: FAIL` |
+| Confidence | `confidence: High`, `confidence: Medium`, `confidence: Low`, `confidence: Unknown` |
+| 1-line return verbs | `generated`, `changed`, `written`, `conventions written`, `auto_fix_patch written` (only as leading keyword tokens in sub-agent 1-line returns; natural-language usage in prose is exempt) |
+| Prefix | `[harness]` |
+| Status format labels | `Task`, `Mode`, `Model`, `Style`, `Phase`, `Round`, `Branch`, `Scope`, `Directory`, `Verifier`, `Language`, `Test`, `Build`, `Lint`, `TypeCheck`, `Output` (monospace alignment preservation) |
+| Identifiers | state.json field names (e.g. `verify.layer1_retries`), file paths (`{docs_path}verify_report.md`, `.harness/...`), git branch names (`harness/<slug>`), commands (e.g. `./gradlew test`, `npm run lint`), state-machine phase keys (`plan_ready`, `generating`, ...) |
+
+### Print Translation Pattern
+
+When rendering a `Print:` directive:
+- Translate natural-language portions to `user_lang`.
+- Glossary tokens above remain English raw.
+- Variable substitutions (`{first line}`, `{layer1_retries}`, `{docs_path}...` etc.) follow §1-line Return Translation or §Glossary rules above.
+- AskUserQuestion option label/description also follows this rule.
+- Note: `(in user_lang)` markers on AskUserQuestion sites refer to UI prompt translation and are a separate context from the label-preservation rule for Status Format / Setup Summary labels.
+- Note: When this contract refers to `Print` directives, the token MUST be wrapped in backtick inline code spans to avoid visual collision with column-0 `Print:` directives in the body.
+
+### 1-line Return Translation
+
+Sub-agent 1-line return (`<keyword> — <summary>`) processing:
+
+- **Parse phase (English raw):** Extract Glossary keywords from the first line for state-machine transitions. String matching uses English raw only.
+- **Display phase (force user_lang):** The non-keyword free-text summary portion is force-converted to `user_lang` at display time. If the input is already `user_lang`, the result is identical (idempotent — no language-detection heuristic required). Partial-English or mixed-language text follows the same rule for consistency and predictability.
+- **Format:** `<keyword> — <summary>`. Split on first ` — ` (space-em-dash-space). On split failure, apply fallback per §Sub-agent Return Value Rules: treat as `confidence: Unknown`.
+
+<!-- SYNC-WITH: §Sub-agent Return Value Rules — item 3 + 1-line return parse failure -->
+
 ## Standard Status Format
 
-Read `.harness/state.json` and print (in `user_lang`):
+Read `.harness/state.json` and print per §Output Language Contract — Print Translation Pattern (labels remain English raw for monospace alignment; values follow §Output Language Contract — Preserved-English Glossary):
 ```
 [harness]
   Task   : <task>
@@ -401,7 +445,7 @@ Retry loops:
 > `verify.autofix_attempted` starts `false` each new session (session-wide once-only limit — not reset on round increment).
 > `autofix` starts `null`; transitions to `{ "last_patch_path": "...", "applied": "proposed"|"applied"|"rejected"|"stopped", "triggered_at": "<ISO8601>" }` during H2 flow.
 
-12. **Print setup summary** (in `user_lang`):
+12. **Print setup summary** per §Output Language Contract — Print Translation Pattern (labels remain English raw; values follow §Output Language Contract — Preserved-English Glossary):
 ```
 [harness] Task started!
   Directory : <path>
@@ -513,7 +557,7 @@ Ask via AskUserQuestion (in `user_lang`):
 **If "Scan":**
 
 1. Read template: `{CLAUDE_PLUGIN_ROOT}/templates/planner/convention_scanner.md`
-2. Fill variables: `{repo_path}`, `{lang}`, `{scope}`, `{output_path}` = `.harness/conventions.md`.
+2. Fill variables: `{repo_path}`, `{lang}`, `{scope}`, `{user_lang}`, `{output_path}` = `.harness/conventions.md`.
 3. **Dispatch 1 sub-agent** (convention scanner). Model: if preset ≠ "default", use `model_config.advisor` (or haiku for economy).
 4. Parse return — first line should contain `"conventions written"`.
 5. Verify `.harness/conventions.md` exists.
@@ -754,14 +798,14 @@ Print: `[harness] Phase: Verify (Layer 1 — Mechanical)`
    - `{todo_blocking}`: from state.json `verify.todo_blocking`
 3. Update phase → `"verifying"`, `updated_at → now`.
 4. **Dispatch Verify sub-agent** with `model: model_config.verifier` (default: haiku; override via --verifier-model).
-5. Parse return — first line:
+5. Parse return — first line (English raw — see §Output Language Contract — Preserved-English Glossary):
    - Contains `"PASS"` → `verify.layer1_result → "PASS"`
    - Contains `"FAIL"` → `verify.layer1_result → "FAIL"`
 6. Update phase → `"verify_done"`, `updated_at → now`.
 
 #### If PASS:
 
-Print:
+Print (translate body to user_lang per §Output Language Contract — Print Translation Pattern; preserve `[harness]`, `PASS`):
 ```
 [harness] Verify (Layer 1) complete.
   Result : PASS
@@ -772,7 +816,7 @@ Continue to Step 6.
 #### If FAIL and retries < 3:
 
 Increment `verify.layer1_retries` in state.json.
-Print:
+Print (translate body to user_lang per §Output Language Contract — Print Translation Pattern; preserve `[harness]`, `FAIL`):
 ```
 [harness] Verify (Layer 1) FAIL — retrying Generator (attempt {layer1_retries}/3)
   {first line error summary}
@@ -793,7 +837,7 @@ After retry sub-agent completes: phase → `"generate_done"`, `updated_at → no
 
 #### If FAIL and retries >= 3:
 
-Print:
+Print (translate body to user_lang per §Output Language Contract — Print Translation Pattern; preserve `[harness]`, `FAIL`):
 ```
 [harness] Verify (Layer 1) FAIL — max retries reached (3/3)
   Latest error: {first line error summary}
@@ -829,6 +873,7 @@ If "Stop": halt (keep phase as `verify_done`).
      - Violations: drop path + print `[harness] ⚠ Path validation failed: <path> — excluded from Proposer input`
      - Cap: maximum 5 paths. Excess paths dropped silently.
      - If 0 valid paths remain: print `[harness] ⚠ No valid file paths found — Proposer input will be empty`
+   - `{user_lang}` = from state.json
    - `{output_path}` = `.harness/generator/auto_fix_patch.md`
 4. **Dispatch Auto-fix Proposer sub-agent** with `model: model_config.advisor ?? "opus"`.
    - If `model_config.preset == "default"`, use `"opus"` (explicit upgrade — 2nd GATE UI will warn cost).
@@ -899,7 +944,7 @@ Print: `  Dispatching evaluator sub-agent...`
 3. Update phase → `"evaluating"`, `updated_at → now`.
 4. **Dispatch Evaluator sub-agent** using `subagent_type: "superpowers:code-reviewer"` if available.
    - Model: if preset ≠ "default", use `model_config.evaluator`.
-5. Parse return — first line:
+5. Parse return — first line (English raw — see §Output Language Contract — Preserved-English Glossary):
    - Contains `"PASS"` → `verify.layer2_result → "PASS"`. Print: `  ✓ {first line}`
    - Contains `"FAIL L2"` → `verify.layer2_result → "FAIL"`. Print: `  ✗ {first line}`
    - Contains `"FAIL L3"` → `verify.layer2_result → "PASS"` (Layer 2 passed). Print: `  ✗ {first line}`
@@ -930,7 +975,7 @@ Proceed to Step 8.
 Layer 2 failed. Auto-retry without user gate (same pattern as Layer 1 retry).
 
 Increment `verify.layer2_retries` in state.json.
-Print:
+Print (translate body to user_lang per §Output Language Contract — Print Translation Pattern; preserve `[harness]`, `FAIL`):
 ```
 [harness] Evaluate FAIL (Layer 2) — retrying Generator (attempt {layer2_retries}/2)
   {first line from evaluator}
@@ -949,7 +994,7 @@ After retry completes: phase → `"generate_done"`, `updated_at → now`, then *
 
 #### If FAIL — Layer 2 and layer2_retries >= 2:
 
-Print:
+Print (translate body to user_lang per §Output Language Contract — Print Translation Pattern; preserve `[harness]`, `FAIL`):
 ```
 [harness] Evaluate FAIL (Layer 2) — max retries reached (2/2)
   Failing items: {summary from qa_report.md}
@@ -1166,7 +1211,7 @@ validate_path(path, kind) where kind ∈ {output_dir, file_reference, diff_targe
 - **Planner proposals must be independent.** Never share one persona's work with another during proposal.
 - **Generator advisors review the plan, not code.** Advisory before implementation.
 - **Use available skills.** Search by keyword, not plugin name. Proceed without if none found.
-- **User language.** All user-facing output in `user_lang`.
+- **User language.** All user-facing output in `user_lang` per §Output Language Contract. Glossary tokens (`PASS`/`FAIL`/`Verdict`/`[harness]`/etc.) preserved English. Parser keywords MUST remain English raw — see §Sub-agent Return Value Rules.
 - **Intermediate outputs are ephemeral.** Only final artifacts preserved in `docs/`.
 - **Orchestrator reads no intermediate files.** See §Architecture Principles for full exception list.
 - **1-line return parsing.** Only first line of sub-agent return is used for state decisions.
