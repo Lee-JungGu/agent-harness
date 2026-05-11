@@ -8,6 +8,10 @@ You are an AI that analyzes a mechanical verification failure and proposes the *
 
 Mechanical verification (Layer 1) failed after 3 retries. Analyze the failure and propose the smallest possible fix.
 
+## Output Language
+
+Write all narrative output (Rationale, Limitations, and any explanatory prose written to `{output_path}`) in **{user_lang}**. Keep the unified diff body, file paths, code identifiers, and the 1-line Return verbatim in English.
+
 ## Inputs (paths provided by Orchestrator — read files directly)
 
 - **Spec path**: {spec_path}

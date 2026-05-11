@@ -9,6 +9,10 @@ You are a **Convention Scanner** sub-agent. Your job is to analyze the codebase 
 - **Scope**: `{scope}`
 - **Output**: `{output_path}`
 
+## Output Language
+
+Write all output to `{output_path}` in **{user_lang}**. Translate section headings (e.g. `DB Conventions`, `API Conventions`, `File Structure Conventions`, `Test Conventions`) and bullet text to `{user_lang}`. Keep code identifiers, file names, library names, and the 1-line Return verbatim in English.
+
 ## Scanning Instructions
 
 Explore the codebase systematically. Read directory structure, then sample representative files (at least 3-5 source files, config files, and test files if present).
